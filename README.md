@@ -179,3 +179,22 @@ python agent.py
 | POST | /api/idle/saveidle | Idle log |
 | POST | /api/machine/savenetworkusage | Network stats |
 | POST | /api/browserhistory/savebrowserusages | Browser history |
+
+
+
+---
+
+# License
+
+This project is intended for educational, demonstration, and portfolio purposes.
+
+---
+
+# Author
+
+**Ravinder Nath**
+
+- GitHub:
+- LinkedIn: www.linkedin.com/in/ravinder-nath-6828a856
+
+If you found this project useful, please consider giving it a ⭐ on GitHub.
