@@ -6,6 +6,6 @@ export const authService = {
   getEmployeeList: () => API.get('/account/getemployeelist'),
   getUserList: () => API.get('/account/getuserlist'),
   assignRole: (email, role) => API.post('/account/assign-role', { email, role }),
-  deleteUser: (empEmail) => API.post('/account/deltemanagementuser', { empEmail }),
+  deleteUser: (empEmail) => API.post('/account/deletemanagementuser', { empEmail }),
   getStaff: (params) => API.get('/account/getstaffdetailsbyfilter', { params }),
 };

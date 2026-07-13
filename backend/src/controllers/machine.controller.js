@@ -4,7 +4,7 @@ const SessionModel = require('../models/Session.model');
 const NetworkModel = require('../models/Network.model');
 const TimeSettingsModel = require('../models/TimeSettings.model');
 const { ok } = require('../utils/response');
-const { toMySQL, toDate } = require('../utils/dateHelper');
+const { toMySQL, toDate, nowIST } = require('../utils/dateHelper');
 
 const heartbeat = async (req, res, next) => {
   try {
@@ -28,7 +28,7 @@ const heartbeat = async (req, res, next) => {
 const lockUnlock = async (req, res, next) => {
   try {
     const { email, machineName, eventType, eventTime } = req.body;
-    const ts = toMySQL(eventTime) || new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+    const ts = toMySQL(eventTime) || nowIST();
     const logDate = toDate(eventTime) || new Date().toISOString().split('T')[0];
     await db.query('INSERT INTO lock_unlock_events (emp_email,machine_name,event_type,event_time,log_date) VALUES (?,?,?,?,?)', [email, machineName, eventType, ts, logDate]);
     return ok(res, null, 'Logged');
@@ -46,7 +46,7 @@ const saveNetwork = async (req, res, next) => {
 const saveGeo = async (req, res, next) => {
   try {
     const { email, machineName, latitude, longitude, address, locationType } = req.body;
-    const now = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+    const now = nowIST();
     const today = new Date().toISOString().split('T')[0];
     await db.query('INSERT INTO geolocation_logs (emp_email,machine_name,latitude,longitude,address,location_type,logged_at,log_date) VALUES (?,?,?,?,?,?,?,?)',
       [email, machineName, latitude, longitude, address, locationType || 'unknown', now, today]);

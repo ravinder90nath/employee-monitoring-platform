@@ -7,7 +7,10 @@ const { ok, fail } = require('../utils/response');
 const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) return fail(res, 'Email and password required', 400);
+    if (!email || !password) {
+      console.log('Body received:', req.body);
+      return fail(res, 'Email and password required', 400);
+    }
     const user = await PortalUserModel.findByEmail(email);
     if (!user) return fail(res, 'Invalid credentials', 401);
     const valid = await bcrypt.compare(password, user.password_hash);

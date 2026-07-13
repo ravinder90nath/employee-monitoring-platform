@@ -1,8 +1,9 @@
 const db = require('../config/database');
+const { nowIST } = require('../utils/dateHelper');
 
 const SessionModel = {
   async startOrUpdate(email, machineName, ipAddress) {
-    const now = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+    const now = nowIST();
     const [active] = await db.query('SELECT id FROM machine_sessions WHERE emp_email=? AND is_active=1 LIMIT 1', [email]);
     if (active.length) {
       await db.query('UPDATE machine_sessions SET ip_address=?, machine_name=?, session_start=? WHERE id=?', [ipAddress, machineName, now, active[0].id]);
@@ -13,7 +14,7 @@ const SessionModel = {
   },
 
   async close(email) {
-    const now = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+    const now = nowIST();
     await db.query('UPDATE machine_sessions SET is_active=0, session_end=? WHERE emp_email=? AND is_active=1', [now, email]);
   },
 

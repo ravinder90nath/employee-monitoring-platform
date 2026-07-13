@@ -38,8 +38,8 @@ const getSessionList = async (req, res, next) => {
 
 const getAgentLogs = async (req, res, next) => {
   try {
-    const { fromData, toDate } = req.query;
-    const [rows] = await db.query('SELECT * FROM agent_logs WHERE DATE(created_at) BETWEEN ? AND ? ORDER BY created_at DESC LIMIT 500', [fromData, toDate]);
+    const { fromDate, toDate } = req.query;
+    const [rows] = await db.query('SELECT * FROM agent_logs WHERE DATE(created_at) BETWEEN ? AND ? ORDER BY created_at DESC LIMIT 500', [fromDate, toDate]);
     return ok(res, rows);
   } catch (e) { next(e); }
 };

@@ -148,6 +148,20 @@ CREATE TABLE lock_unlock_events (
   FOREIGN KEY (emp_email) REFERENCES employees(emp_email) ON DELETE CASCADE
 );
 
+CREATE TABLE geolocation_logs (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  emp_email VARCHAR(255) NOT NULL,
+  machine_name VARCHAR(255),
+  latitude DECIMAL(10,7),
+  longitude DECIMAL(10,7),
+  address VARCHAR(500),
+  location_type ENUM('office','remote','unknown') DEFAULT 'unknown',
+  logged_at DATETIME NOT NULL,
+  log_date DATE NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (emp_email) REFERENCES employees(emp_email) ON DELETE CASCADE
+);
+
 CREATE TABLE apps_master (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(255) NOT NULL UNIQUE,

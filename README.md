@@ -153,32 +153,578 @@ python agent.py
 
 ---
 
-## API Routes
+## API Documentation
 
-### Portal (Bearer JWT)
-| Method | Path | Description |
-|---|---|---|
-| POST | /api/account/login | Login |
-| GET | /api/account/getstaffdetailsbyfilter | Employee list with status |
-| GET | /api/dashboard/getdashboarddata | Stats |
-| GET | /api/dashboard/gettopfiveproddistract | Top 5 apps |
-| GET | /api/screenshot/getscreenshots | Screenshots |
-| GET | /api/reports/activitylog | Activity report |
-| GET | /api/reports/workinghrscompliance | Compliance |
-| GET | /api/reports/productivity | Productivity |
-| GET/POST/PUT/DELETE | /api/settings/shifts | Shift management |
-| GET/POST/PUT | /api/settings/apps | App categories |
-| GET/POST | /api/settings/timesettings | Time settings |
+### Authentication
+- **Portal APIs**: Use JWT Bearer Token in header: `Authorization: Bearer <token>`
+- **Agent APIs**: Use API Key in header: `X-Api-Key: ems_agent_api_key_2024`
 
-### Agent (X-Api-Key header)
-| Method | Path | Description |
-|---|---|---|
-| POST | /api/machine/heartbeat | Heartbeat (returns config) |
-| POST | /api/applog/saveapplog | App usage |
-| POST | /api/screenshot/savescreenshot | Screenshot upload |
-| POST | /api/idle/saveidle | Idle log |
-| POST | /api/machine/savenetworkusage | Network stats |
-| POST | /api/browserhistory/savebrowserusages | Browser history |
+---
+
+## 🔐 Authentication Endpoints
+
+### 1. **Login**
+```http
+POST /api/account/login
+Content-Type: application/json
+
+{
+  "email": "admin@ems.com",
+  "password": "Admin@1234"
+}
+```
+**Response:**
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "data": {
+    "id": 1,
+    "email": "admin@ems.com",
+    "user_name": "EMS Admin",
+    "role": "SuperAdmin",
+    "accessToken": "eyJhbGciOiJIUzI1NiIs..."
+  }
+}
+```
+
+---
+
+## 👥 Staff Management Endpoints
+
+### 2. **Get Staff Details with Filters**
+```http
+GET /api/account/getstaffdetailsbyfilter?department=Engineering&title=TL
+Authorization: Bearer <token>
+```
+**Query Parameters:**
+- `department` (optional) - Filter by department
+- `title` (optional) - Filter by job title
+- `search` (optional) - Search by name or email
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "empEmail": "john.doe@company.com",
+      "empName": "John Doe",
+      "status": "online",
+      "computerName": "JOHN-PC",
+      "ipAddress": "192.168.1.100",
+      "lastSignal": "2 min ago",
+      "isTracking": true,
+      "isScreenShotDisable": false
+    }
+  ]
+}
+```
+
+### 3. **Get All Employees**
+```http
+GET /api/account/getemployeelist
+Authorization: Bearer <token>
+```
+
+### 4. **Get Department & Title Hierarchy**
+```http
+GET /api/account/getdepartmentandtitle
+Authorization: Bearer <token>
+```
+
+### 5. **Assign Role to User**
+```http
+POST /api/account/assign-role
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "email": "john.doe@company.com",
+  "role": "Admin"
+}
+```
+
+### 6. **Delete Management User**
+```http
+POST /api/account/deletemanagementuser
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "empEmail": "john.doe@company.com"
+}
+```
+
+### 7. **Get User List**
+```http
+GET /api/account/getuserlist
+Authorization: Bearer <token>
+```
+
+---
+
+## 📊 Dashboard Endpoints
+
+### 8. **Get Dashboard Stats**
+```http
+GET /api/dashboard/getdashboarddata
+Authorization: Bearer <token>
+```
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "totalUserCount": 6,
+    "activeUserCount": 2,
+    "totalIdleCount": 1,
+    "longIdleCount": 0
+  }
+}
+```
+
+### 9. **Get Top 5 Productive/Distractive Apps**
+```http
+GET /api/dashboard/gettopfiveproddistract?startDate=2026-07-01&endDate=2026-07-13&Department=Engineering&Title=TL
+Authorization: Bearer <token>
+```
+**Query Parameters:**
+- `startDate` - Start date (YYYY-MM-DD)
+- `endDate` - End date (YYYY-MM-DD)
+- `Department` (optional) - Filter by department
+- `Title` (optional) - Filter by title
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "topProductive": [
+      { "name": "VS Code", "totalMinutes": 450, "type": "IDE" }
+    ],
+    "topDistracting": [
+      { "name": "YouTube", "totalMinutes": 120, "type": "Video" }
+    ]
+  }
+}
+```
+
+### 10. **Get Network Usage**
+```http
+GET /api/dashboard/getnetworkusages?startDate=2026-07-01&endDate=2026-07-13&empEmail=john@company.com
+Authorization: Bearer <token>
+```
+**Query Parameters:**
+- `startDate` - Start date (YYYY-MM-DD)
+- `endDate` - End date (YYYY-MM-DD)
+- `empEmail` (optional) - Filter by employee email
+
+### 11. **Get Working Hours Data**
+```http
+GET /api/dashboard/getworkinghrsdata?startDate=2026-07-01&endDate=2026-07-13&pageNumber=1&pageSize=20
+Authorization: Bearer <token>
+```
+**Query Parameters:**
+- `startDate` - Start date (YYYY-MM-DD)
+- `endDate` - End date (YYYY-MM-DD)
+- `Department` (optional)
+- `Title` (optional)
+- `pageNumber` (optional, default: 1)
+- `pageSize` (optional, default: 20)
+
+---
+
+## 📸 Screenshot Endpoints
+
+### 12. **Upload Screenshot** (Agent)
+```http
+POST /api/screenshot/savescreenshot
+X-Api-Key: ems_agent_api_key_2024
+Content-Type: multipart/form-data
+
+Form Data:
+- screenshot: <file>
+- email: john@company.com
+- machineName: JOHN-PC
+- capturedAt: 2026-07-13T14:30:00Z
+- screenIndex: 1
+```
+
+### 13. **Get Screenshots**
+```http
+GET /api/screenshot/getscreenshots?email=john@company.com&date=2026-07-13
+Authorization: Bearer <token>
+```
+**Query Parameters:**
+- `email` - Employee email
+- `date` (optional) - Specific date (YYYY-MM-DD)
+
+---
+
+## 📋 App Log Endpoints
+
+### 14. **Save App Usage** (Agent)
+```http
+POST /api/applog/saveapplog
+X-Api-Key: ems_agent_api_key_2024
+Content-Type: application/json
+
+{
+  "email": "john@company.com",
+  "machineName": "JOHN-PC",
+  "createdAt": "2026-07-13T14:30:00Z",
+  "apps": [
+    {
+      "appName": "Visual Studio Code",
+      "durationInMinutes": 120
+    },
+    {
+      "appName": "Chrome",
+      "durationInMinutes": 45
+    }
+  ]
+}
+```
+
+### 15. **Get App Logs**
+```http
+GET /api/applog/getapplog?fromDate=2026-07-01&toDate=2026-07-13&emailId=john@company.com
+Authorization: Bearer <token>
+```
+**Query Parameters:**
+- `fromDate` - Start date (YYYY-MM-DD)
+- `toDate` - End date (YYYY-MM-DD)
+- `emailId` - Employee email
+
+---
+
+## ⏱️ Idle Endpoints
+
+### 16. **Save Idle Log** (Agent)
+```http
+POST /api/idle/saveidle
+X-Api-Key: ems_agent_api_key_2024
+Content-Type: application/json
+
+{
+  "email": "john@company.com",
+  "machineName": "JOHN-PC",
+  "idleStart": "2026-07-13T14:30:00Z",
+  "idleEnd": "2026-07-13T14:35:00Z",
+  "durationInMinutes": 5
+}
+```
+
+### 17. **Get Idle Logs**
+```http
+GET /api/idle/getidle?email=john@company.com&from=2026-07-01&to=2026-07-13
+Authorization: Bearer <token>
+```
+
+---
+
+## 🌐 Browser History Endpoints
+
+### 18. **Save Browser Usage** (Agent)
+```http
+POST /api/browserhistory/savebrowserusages
+X-Api-Key: ems_agent_api_key_2024
+Content-Type: application/json
+
+{
+  "email": "john@company.com",
+  "machineName": "JOHN-PC",
+  "createdAt": "2026-07-13T14:30:00Z",
+  "usage": [
+    {
+      "url": "https://github.com",
+      "durationInMinutes": 30,
+      "browser": "Chrome"
+    },
+    {
+      "url": "https://stackoverflow.com",
+      "durationInMinutes": 20,
+      "browser": "Firefox"
+    }
+  ]
+}
+```
+
+---
+
+## 💻 Machine Endpoints
+
+### 19. **Heartbeat** (Agent) - Sends config back
+```http
+POST /api/machine/heartbeat
+X-Api-Key: ems_agent_api_key_2024
+Content-Type: application/json
+
+{
+  "email": "john@company.com",
+  "machineName": "JOHN-PC",
+  "ipAddress": "192.168.1.100"
+}
+```
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "screenshot_interval_minutes": 5,
+    "app_log_interval_minutes": 30,
+    "idle_threshold_minutes": 5,
+    "is_screenshot_enabled": true,
+    "is_app_log_enabled": true
+  }
+}
+```
+
+### 20. **Save Network Usage** (Agent)
+```http
+POST /api/machine/savenetworkusage
+X-Api-Key: ems_agent_api_key_2024
+Content-Type: application/json
+
+{
+  "email": "john@company.com",
+  "machineName": "JOHN-PC",
+  "uploadBytes": 1024000,
+  "downloadBytes": 5120000
+}
+```
+
+### 21. **Log Lock/Unlock Event** (Agent)
+```http
+POST /api/machine/loglockunlock
+X-Api-Key: ems_agent_api_key_2024
+Content-Type: application/json
+
+{
+  "email": "john@company.com",
+  "machineName": "JOHN-PC",
+  "eventType": "lock",
+  "eventTime": "2026-07-13T14:30:00Z"
+}
+```
+
+### 22. **Save Geolocation** (Agent)
+```http
+POST /api/machine/savegeolocation
+X-Api-Key: ems_agent_api_key_2024
+Content-Type: application/json
+
+{
+  "email": "john@company.com",
+  "machineName": "JOHN-PC",
+  "latitude": 28.6139,
+  "longitude": 77.2090,
+  "address": "Gurgaon, India",
+  "locationType": "office"
+}
+```
+
+---
+
+## 📈 Reports Endpoints
+
+### 23. **Activity Log Report**
+```http
+GET /api/reports/activitylog?startDate=2026-07-01&endDate=2026-07-13&department=Engineering&title=TL
+Authorization: Bearer <token>
+```
+
+### 24. **Activity Log By User**
+```http
+GET /api/reports/activitylogbyuser?startDate=2026-07-01&endDate=2026-07-13&empEmail=john@company.com
+Authorization: Bearer <token>
+```
+
+### 25. **Working Hours Compliance**
+```http
+GET /api/reports/workinghrscompliance?date=2026-07-13&department=Engineering
+Authorization: Bearer <token>
+```
+
+### 26. **Productivity Report**
+```http
+GET /api/reports/productivity?startDate=2026-07-01&endDate=2026-07-13&department=Engineering&title=TL
+Authorization: Bearer <token>
+```
+
+---
+
+## ⚙️ Settings Endpoints
+
+### 27. **Get Shifts**
+```http
+GET /api/settings/shifts
+Authorization: Bearer <token>
+```
+
+### 28. **Create Shift**
+```http
+POST /api/settings/shifts
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "name": "Evening Shift",
+  "country": "India",
+  "working_days": "Mon-Fri",
+  "start_time": "18:00:00",
+  "end_time": "02:00:00",
+  "working_hours": 8,
+  "is_default": false,
+  "created_by": "Admin"
+}
+```
+
+### 29. **Update Shift**
+```http
+PUT /api/settings/shifts/:id
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "name": "Evening Shift",
+  "working_hours": 9
+}
+```
+
+### 30. **Delete Shift**
+```http
+DELETE /api/settings/shifts/:id
+Authorization: Bearer <token>
+```
+
+### 31. **Assign Shift to Employee**
+```http
+POST /api/settings/shifts/assign
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "empEmail": "john@company.com",
+  "shiftId": 2
+}
+```
+
+### 32. **Get Apps Master**
+```http
+GET /api/settings/apps?category=productive&type=App
+Authorization: Bearer <token>
+```
+
+### 33. **Add App**
+```http
+POST /api/settings/apps
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "name": "Slack",
+  "type": "App",
+  "category": "neutral"
+}
+```
+
+### 34. **Update App Category**
+```http
+PUT /api/settings/apps/:id
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "category": "productive"
+}
+```
+
+### 35. **Get Time Settings**
+```http
+GET /api/settings/timesettings?email=john@company.com
+Authorization: Bearer <token>
+```
+
+### 36. **Update Time Settings**
+```http
+POST /api/settings/timesettings
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "empEmail": "john@company.com",
+  "screenshot_interval_minutes": 5,
+  "app_log_interval_minutes": 30,
+  "idle_threshold_minutes": 5,
+  "is_screenshot_enabled": true,
+  "is_app_log_enabled": true,
+  "is_tracking_enabled": true
+}
+```
+
+### 37. **Toggle Service**
+```http
+POST /api/settings/timesettings/toggle
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "empEmail": "john@company.com",
+  "service": "is_screenshot_enabled",
+  "value": true
+}
+```
+
+---
+
+## Admin Endpoints
+
+### 38. **Save Agent Logs**
+```http
+POST /api/admin/savelogs
+X-Api-Key: ems_agent_api_key_2024
+Content-Type: application/json
+
+{
+  "empEmail": "john@company.com",
+  "machineName": "JOHN-PC",
+  "eventType": "Success",
+  "eventData": "Screenshots captured successfully",
+  "createdAt": "2026-07-13T14:30:00Z"
+}
+```
+
+### 39. **Get User Details**
+```http
+GET /api/admin/getuserdetailsbyemail?email=john@company.com
+Authorization: Bearer <token>
+```
+
+### 40. **Get Session List**
+```http
+GET /api/admin/getsessionlist?email=john@company.com&from=2026-07-01&to=2026-07-13
+Authorization: Bearer <token>
+```
+
+### 41. **Get Agent Logs**
+```http
+GET /api/admin/fetchlogdata?fromDate=2026-07-01&toDate=2026-07-13
+Authorization: Bearer <token>
+```
+
+### 42. **Health Check**
+```http
+GET /api/admin/health
+```
+**Response:**
+```json
+{
+  "status": "Healthy",
+  "TimeStamp": "2026-07-13T14:30:00Z"
+}
+```
 
 
 
