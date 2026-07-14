@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import useFetch from '../../../hooks/useFetch';
 import { authService } from '../../../services/auth.service';
-import { Button, Badge, LoadingCenter, EmptyState, Select } from '../../../components/common';
+import { Button, Badge, LoadingCenter, EmptyState, Select, Confirm, Alert } from '../../../components/common';
 import { fmt } from '../../../utils/helpers';
 
 const ManageAdmin = () => {
@@ -10,17 +10,21 @@ const ManageAdmin = () => {
   const [form,   setForm]   = useState({ email:'', role:'Admin' });
   const [saving, setSaving] = useState(false);
 
+  const [confirm, setConfirm] = useState({ open:false, message:'', onConfirm:null });
+  const [alertMsg, setAlertMsg] = useState(null);
+
   const assign = async () => {
     if (!form.email.trim()) return;
     setSaving(true);
     try { await authService.assignRole(form.email, form.role); setModal(false); setForm({ email:'', role:'Admin' }); refetch(); }
-    catch(e) { alert('Failed: '+e.message); }
+    catch(e) { setAlertMsg('Failed: '+e.message); }
     setSaving(false);
   };
 
   const remove = async email => {
-    if (!window.confirm(`Remove portal access for ${email}?`)) return;
-    try { await authService.deleteUser(email); refetch(); } catch(e) { alert(e.message); }
+    setConfirm({ open:true, message:`Remove portal access for ${email}?`, onConfirm: async () => {
+      try { await authService.deleteUser(email); refetch(); } catch(e) { setAlertMsg(e.message); }
+    } });
   };
 
   const roleBadge = r => ({ SuperAdmin:'green', Admin:'blue', Staff:'gray' }[r] || 'gray');
@@ -81,6 +85,8 @@ const ManageAdmin = () => {
           </div>
         </div>
       )}
+      <Confirm open={confirm.open} message={confirm.message} onClose={() => setConfirm({open:false})} onConfirm={confirm.onConfirm} />
+      <Alert open={!!alertMsg} message={alertMsg||''} onClose={() => setAlertMsg(null)} />
     </div>
   );
 };

@@ -20,7 +20,13 @@ const getApplog = async (req, res, next) => {
     const grouped = {};
     raw.forEach(r => {
       if (!grouped[r.emp_email]) grouped[r.emp_email] = { employeeEmail: r.emp_email, machineName: r.machine_name || '', appdata: [] };
-      grouped[r.emp_email].appdata.push({ appName: r.app_name, durationInMinutes: parseFloat(r.duration_minutes) || 0, logDate: r.log_date });
+      grouped[r.emp_email].appdata.push({
+        appName: r.app_name,
+        durationInMinutes: parseFloat(r.duration_minutes) || 0,
+        createdAt: r.created_at,
+        category: r.category || 'neutral',
+        logDate: r.log_date,
+      });
     });
     return ok(res, { aggregated, raw: Object.values(grouped) });
   } catch (e) { next(e); }

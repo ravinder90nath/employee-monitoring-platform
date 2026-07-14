@@ -18,7 +18,13 @@ const AppLogModel = {
   },
 
   async getRange(email, from, to) {
-    const [rows] = await db.query('SELECT * FROM app_logs WHERE emp_email=? AND log_date BETWEEN ? AND ? ORDER BY created_at', [email, from, to]);
+    const [rows] = await db.query(`
+      SELECT al.*, COALESCE(am.category,'neutral') AS category
+      FROM app_logs al
+      LEFT JOIN apps_master am ON LOWER(al.app_name)=LOWER(am.name)
+      WHERE al.emp_email=? AND al.log_date BETWEEN ? AND ?
+      ORDER BY al.created_at
+    `, [email, from, to]);
     return rows;
   },
 

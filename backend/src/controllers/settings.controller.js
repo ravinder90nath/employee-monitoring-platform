@@ -8,8 +8,23 @@ const { ok, fail } = require('../utils/response');
 const getShifts       = async (req, res, next) => { try { return ok(res, await ShiftModel.findAll()); } catch (e) { next(e); } };
 const createShift     = async (req, res, next) => { try { const id = await ShiftModel.create(req.body); return ok(res, { id }, 'Created'); } catch (e) { next(e); } };
 const updateShift     = async (req, res, next) => { try { await ShiftModel.update(req.params.id, req.body); return ok(res, null, 'Updated'); } catch (e) { next(e); } };
-const deleteShift     = async (req, res, next) => { try { await ShiftModel.remove(req.params.id); return ok(res, null, 'Deleted'); } catch (e) { next(e); } };
+const deleteShift     = async (req, res, next) => {
+  try {
+    await ShiftModel.remove(req.params.id);
+    return ok(res, null, 'Deleted');
+  } catch (e) {
+    if (e.message === 'Default shift cannot be deleted') return fail(res, e.message, 400);
+    next(e);
+  }
+};
 const assignShift     = async (req, res, next) => { try { await ShiftModel.assign(req.body.empEmail, req.body.shiftId); return ok(res, null, 'Assigned'); } catch (e) { next(e); } };
+const removeShiftEmployee = async (req, res, next) => {
+  try {
+    await ShiftModel.unassign(req.params.empEmail, req.params.shiftId);
+    return ok(res, null, 'Removed');
+  } catch (e) { next(e); }
+};
+const getShiftEmployees = async (req, res, next) => { try { return ok(res, await ShiftModel.findAssigned(req.params.id)); } catch (e) { next(e); } };
 
 // Apps Master
 const getApps         = async (req, res, next) => { try { return ok(res, await AppsMasterModel.findAll(req.query)); } catch (e) { next(e); } };
@@ -55,4 +70,4 @@ const toggleService = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
-module.exports = { getShifts, createShift, updateShift, deleteShift, assignShift, getApps, updateAppCat, addApp, getTimeSettings, updateTimeSettings, toggleService };
+module.exports = { getShifts, createShift, updateShift, deleteShift, assignShift, removeShiftEmployee, getShiftEmployees, getApps, updateAppCat, addApp, getTimeSettings, updateTimeSettings, toggleService };

@@ -53,7 +53,18 @@ const getDepartmentAndTitle = async (req, res, next) => {
 };
 
 const getUserList   = async (req, res, next) => { try { return ok(res, await PortalUserModel.findAll()); } catch (e) { next(e); } };
-const getEmployeeList = async (req, res, next) => { try { return ok(res, await EmployeeModel.getList()); } catch (e) { next(e); } };
+const getEmployeeList = async (req, res, next) => {
+  try {
+    const emps = await EmployeeModel.findAll();
+    return ok(res, emps.map(e => ({
+      emp_email: e.emp_email,
+      emp_name: e.emp_name,
+      photo: e.photo,
+      shift_name: e.shift_name || 'Default Shift',
+      shift_id: e.shift_id || null,
+    })));
+  } catch (e) { next(e); }
+};
 
 const assignRole = async (req, res, next) => {
   try {

@@ -16,6 +16,7 @@
     "build": "react-scripts build"
   },
   "devDependencies": {
+    "react-scripts": "5.0.1"
   },
   "browserslist": {
     "production": [

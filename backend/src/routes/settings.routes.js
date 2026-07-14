@@ -6,6 +6,8 @@ router.use(authenticate);
 
 router.get('/shifts',          ctrl.getShifts);
 router.post('/shifts/assign',  ctrl.assignShift);   // must be before /:id
+router.get('/shifts/:id/employees', ctrl.getShiftEmployees);
+router.delete('/shifts/:shiftId/employees/:empEmail', ctrl.removeShiftEmployee);
 router.post('/shifts',         ctrl.createShift);
 router.put('/shifts/:id',      ctrl.updateShift);
 router.delete('/shifts/:id',   ctrl.deleteShift);

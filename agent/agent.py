@@ -11,7 +11,7 @@ Build EXE:
   pyinstaller --onefile --noconsole --name=EMSAgent agent.py
 """
 
-import os, sys, json, time, uuid, socket, sqlite3, logging
+import os, sys, json, time, uuid, socket, sqlite3, logging, subprocess, getpass
 import threading, schedule, platform, configparser
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -55,6 +55,15 @@ logging.basicConfig(
 log = logging.getLogger("ems")
 
 # ── Config ────────────────────────────────────────────────────
+def default_emp_email():
+    try:
+        username = getpass.getuser() or socket.gethostname()
+    except Exception:
+        username = socket.gethostname()
+    username = username.strip().lower().replace(" ", "")
+    return f"{username}@company.com"
+
+
 def load_config():
     cfg = configparser.ConfigParser()
     cfg.read(CFG_FILE)
@@ -62,13 +71,36 @@ def load_config():
         cfg["agent"] = {
             "server_url":                   "http://localhost:5000",
             "api_key":                      "ems_agent_api_key_2024",
-            "emp_email":                    "employee@company.com",
+            "emp_email":                    default_emp_email(),
             "machine_name":                 socket.gethostname(),
             "screenshot_interval_minutes":  "5",
             "app_log_interval_minutes":     "30",
+            "browser_log_interval_minutes": "30",
             "idle_threshold_minutes":       "5",
         }
         with open(CFG_FILE, "w") as f: cfg.write(f)
+    else:
+        defaults = {
+            "server_url":                   "http://localhost:5000",
+            "api_key":                      "ems_agent_api_key_2024",
+            "emp_email":                    default_emp_email(),
+            "machine_name":                 socket.gethostname(),
+            "screenshot_interval_minutes":  "5",
+            "app_log_interval_minutes":     "30",
+            "browser_log_interval_minutes": "30",
+            "idle_threshold_minutes":       "5",
+        }
+        updated = False
+        for key, value in defaults.items():
+            if not cfg["agent"].get(key):
+                cfg["agent"][key] = value
+                updated = True
+        email = cfg["agent"].get("emp_email", "").strip()
+        if not email or email.lower() in {"employee@company.com", "employee@employee.com"}:
+            cfg["agent"]["emp_email"] = default_emp_email()
+            updated = True
+        if updated:
+            with open(CFG_FILE, "w") as f: cfg.write(f)
     return cfg
 
 def save_config(cfg):
@@ -77,11 +109,18 @@ def save_config(cfg):
 CFG = load_config()
 SERVER   = CFG["agent"].get("server_url","http://localhost:5000").rstrip("/")
 API_KEY  = CFG["agent"].get("api_key","ems_agent_api_key_2024")
-EMAIL    = CFG["agent"].get("emp_email","employee@company.com")
+EMAIL    = CFG["agent"].get("emp_email", default_emp_email())
 MACHINE  = CFG["agent"].get("machine_name",socket.gethostname())
 SS_INT   = int(CFG["agent"].get("screenshot_interval_minutes","5"))
 APP_INT  = int(CFG["agent"].get("app_log_interval_minutes","30"))
+BROWSER_INT = int(CFG["agent"].get("browser_log_interval_minutes","30"))
 IDLE_MIN = int(CFG["agent"].get("idle_threshold_minutes","5"))
+IS_SCREENSHOT_ENABLED = True
+IS_APP_LOG_ENABLED = True
+IS_BROWSER_LOG_ENABLED = True
+IS_IDLE_ENABLED = True
+IS_GEO_ENABLED = False
+IS_TRACKING_ENABLED = True
 
 # ── Local buffer DB ───────────────────────────────────────────
 def init_db():
@@ -155,25 +194,133 @@ def get_browser_history():
     try:
         import shutil, sqlite3 as sq
         local = Path(os.environ.get("LOCALAPPDATA",""))
-        cutoff = int((datetime.now()-timedelta(minutes=APP_INT)).timestamp()*1e6+11644473600*1e6)
-        for browser, base in [("Chrome",local/"Google/Chrome/User Data"),("Edge",local/"Microsoft/Edge/User Data")]:
-            for prof in ["Default","Profile 1"]:
-                h = base/prof/"History"
+        cutoff = int((datetime.now()-timedelta(minutes=BROWSER_INT)).timestamp()*1e6+11644473600*1e6)
+        # detect available browser profile folders dynamically
+        bases = [("Chrome", local/"Google/Chrome/User Data"), ("Edge", local/"Microsoft/Edge/User Data")]
+        for browser, base in bases:
+            if not base.exists(): continue
+            for prof in [p for p in base.iterdir() if p.is_dir()]:
+                h = prof / "History"
                 if not h.exists(): continue
                 try:
-                    tmp = APP_DIR/f"hist_{browser}.db"
-                    shutil.copy2(str(h),str(tmp))
+                    tmp = APP_DIR/f"hist_{browser}_{prof.name}.db"
+                    shutil.copy2(str(h), str(tmp))
                     con = sq.connect(str(tmp))
-                    rows = con.execute(
-                        "SELECT url,visit_duration FROM visits v JOIN urls u ON v.url=u.id WHERE v.visit_time>? LIMIT 100",
-                        (cutoff,)
-                    ).fetchall()
+                    # Try multiple query patterns to be compatible with different Chromium versions
+                    rows = []
+                    try:
+                        rows = con.execute(
+                            "SELECT u.url, IFNULL(v.visit_duration,0), v.visit_time FROM visits v JOIN urls u ON v.url=u.id WHERE v.visit_time>? LIMIT 200",
+                            (cutoff,)
+                        ).fetchall()
+                    except Exception:
+                        try:
+                            rows = con.execute(
+                                "SELECT url, 0 as visit_duration, last_visit_time as visit_time FROM urls WHERE last_visit_time>? LIMIT 200",
+                                (cutoff,)
+                            ).fetchall()
+                        except Exception:
+                            rows = []
                     con.close(); tmp.unlink(missing_ok=True)
-                    for url,dur in rows:
-                        entries.append({"url":url,"durationInMinutes":round(dur/60000000,2),"browser":browser})
-                except: pass
+                    for url, dur, vtime in rows:
+                        try:
+                            # convert chromium timestamp (microseconds since 1601) to unix
+                            ts = None
+                            if isinstance(vtime, (int, float)) and vtime > 1000000000000:
+                                ts = datetime.fromtimestamp(vtime/1e6 - 11644473600, timezone.utc).isoformat()
+                            else:
+                                ts = datetime.now(timezone.utc).isoformat()
+                        except: ts = datetime.now(timezone.utc).isoformat()
+                        entries.append({"url": url, "durationInMinutes": round((dur or 0)/60000000, 2) if isinstance(dur, (int, float)) else 0, "browser": browser, "createdAt": ts})
+                except Exception as e:
+                    log.debug(f"Browser history read failed for {h}: {e}")
     except Exception as e: log.debug(f"Browser history: {e}")
     return entries
+
+def get_installed_software():
+    items = []
+    if not IS_WIN: return items
+    try:
+        # WMIC can be slow; use it as a best-effort fallback
+        res = subprocess.run(["wmic", "product", "get", "name,version"], capture_output=True, text=True, timeout=30)
+        out = res.stdout.splitlines()
+        for line in out:
+            line = line.strip()
+            if not line or line.lower().startswith("name") or line.lower().startswith("version"): continue
+            parts = [p for p in line.split() if p]
+            if len(parts) >= 1:
+                items.append(line)
+    except Exception as e:
+        log.debug(f"Installed software enumeration failed: {e}")
+    return items
+
+def get_system_info():
+    info = {}
+    try:
+        info['os'] = platform.platform()
+        info['hostname'] = socket.gethostname()
+        info['username'] = os.getlogin() if hasattr(os, 'getlogin') else None
+        info['ip'] = get_ip()
+        try:
+            import psutil
+            info['cpu_count'] = psutil.cpu_count(logical=True)
+            info['total_memory'] = getattr(psutil.virtual_memory(), 'total', None)
+            du = psutil.disk_usage(str(Path.home()))
+            info['disk_total'] = du.total
+            info['disk_free'] = du.free
+            info['boot_time'] = datetime.fromtimestamp(psutil.boot_time(), timezone.utc).isoformat()
+        except Exception:
+            pass
+        info['installed_software'] = get_installed_software()
+    except Exception as e:
+        log.debug(f"get_system_info error: {e}")
+    return info
+
+
+def is_desktop_locked():
+    if not IS_WIN:
+        return False
+    try:
+        import ctypes
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+        DESKTOP_SWITCHDESKTOP = 0x0100
+        hdesk = user32.OpenInputDesktop(0, False, DESKTOP_SWITCHDESKTOP)
+        if not hdesk:
+            return True
+        result = user32.SwitchDesktop(hdesk)
+        user32.CloseDesktop(hdesk)
+        return result == 0
+    except Exception as e:
+        log.debug(f"Lock state detect failed: {e}")
+        return False
+
+
+def get_geolocation():
+    if not REQUESTS_OK:
+        return None, None, None
+    try:
+        for url in ("https://ipinfo.io/json", "http://ip-api.com/json/"):
+            r = requests.get(url, timeout=10)
+            if not r.ok:
+                continue
+            data = r.json()
+            lat = data.get("latitude") or data.get("lat")
+            lon = data.get("longitude") or data.get("lon")
+            if lat is None or lon is None:
+                loc = data.get("loc")
+                if loc:
+                    parts = loc.split(",")
+                    if len(parts) == 2:
+                        lat, lon = parts[0], parts[1]
+            if lat is None or lon is None:
+                continue
+            city = data.get("city") or data.get("regionName") or data.get("region") or ""
+            country = data.get("country") or ""
+            address = ", ".join([p for p in [city, country] if p])
+            return float(lat), float(lon), address
+    except Exception as e:
+        log.debug(f"Geolocation lookup failed: {e}")
+    return None, None, None
 
 # ── API Client ────────────────────────────────────────────────
 class API:
@@ -205,18 +352,49 @@ class API:
                 headers=self.h, timeout=10)
             if r.status_code in (200,201):
                 data = r.json().get("data") or {}
-                # Self-configure from server settings
-                global SS_INT, APP_INT, IDLE_MIN
-                if data.get("screenshot_interval_minutes"):
-                    SS_INT  = int(data["screenshot_interval_minutes"])
-                if data.get("app_log_interval_minutes"):
-                    APP_INT = int(data["app_log_interval_minutes"])
-                if data.get("idle_threshold_minutes"):
-                    IDLE_MIN = int(data["idle_threshold_minutes"])
+                self._apply_settings(data)
                 return True
             return False
         except Exception as e:
             log.debug(f"Heartbeat: {e}"); return False
+
+    def refresh_settings(self):
+        if not REQUESTS_OK: return False
+        try:
+            r = self.s.post(f"{SERVER}/api/machine/refresh",
+                json={"email":EMAIL}, headers=self.h, timeout=10)
+            if r.status_code in (200,201):
+                data = r.json().get("data") or {}
+                self._apply_settings(data)
+                return True
+            return False
+        except Exception as e:
+            log.debug(f"Refresh settings: {e}"); return False
+
+    def _apply_settings(self, data):
+        global SS_INT, APP_INT, BROWSER_INT, IDLE_MIN
+        global IS_SCREENSHOT_ENABLED, IS_APP_LOG_ENABLED, IS_BROWSER_LOG_ENABLED
+        global IS_GEO_ENABLED, IS_TRACKING_ENABLED
+        if data.get("screenshot_interval_minutes") is not None:
+            SS_INT = int(data["screenshot_interval_minutes"])
+        if data.get("app_log_interval_minutes") is not None:
+            APP_INT = int(data["app_log_interval_minutes"])
+        if data.get("browser_log_interval_minutes") is not None:
+            BROWSER_INT = int(data["browser_log_interval_minutes"])
+        if data.get("idle_threshold_minutes") is not None:
+            IDLE_MIN = int(data["idle_threshold_minutes"])
+        if data.get("is_screenshot_enabled") is not None:
+            IS_SCREENSHOT_ENABLED = bool(data["is_screenshot_enabled"])
+        if data.get("is_app_log_enabled") is not None:
+            IS_APP_LOG_ENABLED = bool(data["is_app_log_enabled"])
+        if data.get("is_browser_log_enabled") is not None:
+            IS_BROWSER_LOG_ENABLED = bool(data["is_browser_log_enabled"])
+        if data.get("is_idle_enabled") is not None:
+            IS_IDLE_ENABLED = bool(data["is_idle_enabled"])
+        if data.get("is_geolocation_enabled") is not None:
+            IS_GEO_ENABLED = bool(data["is_geolocation_enabled"])
+        if data.get("is_tracking_enabled") is not None:
+            IS_TRACKING_ENABLED = bool(data["is_tracking_enabled"])
 
     def save_log(self, etype, data=""):
         self.post("/api/admin/savelogs",{"empEmail":EMAIL,"machineName":MACHINE,"eventType":etype,"eventData":data,"createdAt":now_iso()})
@@ -248,6 +426,19 @@ class API:
     def send_network(self, up, down):
         return self.post("/api/machine/savenetworkusage",{"email":EMAIL,"machineName":MACHINE,"uploadBytes":up,"downloadBytes":down})
 
+    def send_lock_unlock(self, eventType, eventTime):
+        return self.post("/api/machine/loglockunlock",{
+            "email":EMAIL,"machineName":MACHINE,
+            "eventType":eventType,"eventTime":eventTime
+        })
+
+    def send_geolocation(self, latitude, longitude, address=None, locationType="ip"):
+        return self.post("/api/machine/savegeolocation",{
+            "email":EMAIL,"machineName":MACHINE,
+            "latitude":latitude,"longitude":longitude,
+            "address":address or "","locationType":locationType
+        })
+
 # ── App Tracker ───────────────────────────────────────────────
 class AppTracker:
     def __init__(self):
@@ -255,9 +446,12 @@ class AppTracker:
         self._start = None
         self._acc   = {}
         self._idle_start = None
+        self._completed_idle = []
         self._lock  = threading.Lock()
 
     def tick(self):
+        if not IS_TRACKING_ENABLED or (not IS_APP_LOG_ENABLED and not IS_IDLE_ENABLED):
+            return
         idle = get_idle_seconds()
         is_idle = idle >= (IDLE_MIN*60)
         app, _ = get_active_app()
@@ -265,13 +459,17 @@ class AppTracker:
         with self._lock:
             if is_idle:
                 if self._idle_start is None:
-                    self._idle_start = now
                     if self._cur and self._start:
                         dur = (now-self._start).total_seconds()/60
                         self._acc[self._cur] = self._acc.get(self._cur,0)+dur
-                    self._cur = None; self._start = None
+                    self._idle_start = now
+                    self._cur = None
+                    self._start = None
             else:
                 if self._idle_start is not None:
+                    dur = (now-self._idle_start).total_seconds()/60
+                    if dur >= 0.1:
+                        self._completed_idle.append((self._idle_start.isoformat(), now.isoformat(), round(dur,2)))
                     self._idle_start = None
                 if app and app != self._cur:
                     if self._cur and self._start:
@@ -284,6 +482,18 @@ class AppTracker:
             apps = [{"appName":k,"durationInMinutes":round(v,2)} for k,v in self._acc.items() if v>0.01]
             self._acc = {}
         return apps
+
+    def flush_idle(self):
+        with self._lock:
+            completed = self._completed_idle[:]
+            self._completed_idle = []
+            if self._idle_start:
+                now = datetime.now(timezone.utc)
+                dur = (now-self._idle_start).total_seconds()/60
+                if dur >= 0.1:
+                    completed.append((self._idle_start.isoformat(), now.isoformat(), round(dur,2)))
+                self._idle_start = None
+            return completed
 
     def get_idle(self):
         with self._lock:
@@ -299,6 +509,8 @@ class ScreenshotService:
         self.api = api
 
     def capture(self):
+        if not IS_TRACKING_ENABLED or not IS_SCREENSHOT_ENABLED:
+            return
         ca = now_iso()
         path = take_screenshot()
         if not path: return
@@ -329,13 +541,69 @@ class NetMonitor:
     def __init__(self, api):
         self.api = api; self._last = None
     def update(self):
-        if not WIN32_OK: return
+        if not WIN32_OK or not IS_TRACKING_ENABLED:
+            return
         try:
             s = psutil.net_io_counters()
             if self._last:
-                self.api.send_network(max(0,s.bytes_sent-self._last.bytes_sent),max(0,s.bytes_recv-self._last.bytes_recv))
+                up = max(0, s.bytes_sent - self._last.bytes_sent)
+                down = max(0, s.bytes_recv - self._last.bytes_recv)
+                log.debug(f"NetMonitor: {up} up, {down} down")
+                if up or down:
+                    if self.api.send_network(up, down):
+                        log.info(f"Uploaded network usage: up={up} down={down} ✓")
+                    else:
+                        log.warning("Network upload failed — will retry")
             self._last = s
         except: pass
+
+
+class LockMonitor:
+    def __init__(self, api):
+        self.api = api
+        self._locked = None
+
+    def update(self):
+        if not IS_WIN or not IS_TRACKING_ENABLED:
+            return
+        try:
+            current_locked = is_desktop_locked()
+            if self._locked is None:
+                self._locked = current_locked
+                return
+            if current_locked != self._locked:
+                self._locked = current_locked
+                event = "locked" if current_locked else "unlocked"
+                if self.api.send_lock_unlock(event, now_iso()):
+                    log.info(f"Uploaded lock state: {event} ✓")
+                else:
+                    log.warning(f"Lock state upload failed: {event}")
+        except Exception as e:
+            log.debug(f"Lock monitor: {e}")
+
+
+class GeoMonitor:
+    def __init__(self, api):
+        self.api = api
+        self._last = None
+
+    def update(self):
+        if not IS_GEO_ENABLED or not REQUESTS_OK:
+            return
+        try:
+            lat, lon, address = get_geolocation()
+            if lat is None or lon is None:
+                return
+            key = f"{lat:.6f}:{lon:.6f}"
+            if key == self._last:
+                return
+            self._last = key
+            if self.api.send_geolocation(lat, lon, address, "ip"):
+                log.info(f"Uploaded GPS location ✓ {lat},{lon}")
+            else:
+                log.warning("Geolocation upload failed")
+        except Exception as e:
+            log.debug(f"Geo monitor: {e}")
 
 # ── Main Agent ────────────────────────────────────────────────
 class EMSAgent:
@@ -345,6 +613,8 @@ class EMSAgent:
         self.tracker= AppTracker()
         self.ss     = ScreenshotService(self.api)
         self.net    = NetMonitor(self.api)
+        self.lock   = LockMonitor(self.api)
+        self.geo    = GeoMonitor(self.api)
         self._run   = False
 
     def start(self):
@@ -363,14 +633,9 @@ class EMSAgent:
         else:
             log.warning("Cannot reach server — buffering locally")
 
-        schedule.every(1).minutes.do(self.api.heartbeat)
-        schedule.every(APP_INT).minutes.do(self._flush_apps)
-        schedule.every(APP_INT).minutes.do(self._flush_browser)
-        schedule.every(SS_INT).minutes.do(self.ss.capture)
-        schedule.every(5).minutes.do(self.ss.retry)
-        schedule.every(5).minutes.do(self.net.update)
-
-        threading.Timer(4.0, self.ss.capture).start()
+        self._schedule_jobs()
+        if IS_TRACKING_ENABLED and IS_SCREENSHOT_ENABLED:
+            self.ss.capture()
 
         self._run = True
         t = threading.Thread(target=self._tick_loop, daemon=True)
@@ -382,25 +647,64 @@ class EMSAgent:
         except KeyboardInterrupt:
             self.stop()
 
+    def _schedule_jobs(self):
+        schedule.clear('heartbeat')
+        schedule.clear('app_flush')
+        schedule.clear('browser_flush')
+        schedule.clear('screenshot')
+        schedule.clear('geolocation')
+        schedule.clear('retry')
+        schedule.clear('network')
+
+        schedule.every(1).minutes.tag('heartbeat').do(self._refresh_settings)
+        schedule.every(max(1, APP_INT)).minutes.tag('app_flush').do(self._flush_apps)
+        schedule.every(max(1, BROWSER_INT)).minutes.tag('browser_flush').do(self._flush_browser)
+        schedule.every(max(1, SS_INT)).minutes.tag('screenshot').do(self.ss.capture)
+        schedule.every(15).minutes.tag('geolocation').do(self.geo.update)
+        schedule.every(5).minutes.tag('retry').do(self.ss.retry)
+        schedule.every(5).minutes.tag('network').do(self.net.update)
+
+    def _refresh_settings(self):
+        old_ss = SS_INT
+        old_browser = BROWSER_INT
+        if self.api.heartbeat():
+            if old_ss != SS_INT or old_browser != BROWSER_INT:
+                log.info(f'✓ Settings refreshed from server (screenshot interval={SS_INT}m, browser interval={BROWSER_INT}m)')
+            else:
+                log.info('✓ Settings refreshed from server')
+            self._schedule_jobs()
+
     def _flush_apps(self):
-        apps = self.tracker.flush()
-        if apps:
-            if self.api.send_apps(apps): log.info(f"Uploaded {len(apps)} app records ✓")
-            else: log.warning("App upload failed — will retry")
-        # Also flush any completed idle period
-        idle_start, idle_end, idle_mins = self.tracker.get_idle()
-        if idle_start and idle_mins >= 1.0:
-            if self.api.send_idle(idle_start, idle_end, idle_mins):
-                log.info(f"Uploaded idle: {idle_mins:.1f} mins ✓")
+        if not IS_TRACKING_ENABLED:
+            return
+        if IS_APP_LOG_ENABLED:
+            apps = self.tracker.flush()
+            if apps:
+                if self.api.send_apps(apps): log.info(f"Uploaded {len(apps)} app records ✓")
+                else: log.warning("App upload failed — will retry")
+        if IS_IDLE_ENABLED:
+            idle_periods = self.tracker.flush_idle()
+            for idle_start, idle_end, idle_mins in idle_periods:
+                if idle_mins >= 1.0 and self.api.send_idle(idle_start, idle_end, idle_mins):
+                    log.info(f"Uploaded idle: {idle_mins:.1f} mins ✓")
 
     def _flush_browser(self):
+        if not IS_TRACKING_ENABLED or not IS_BROWSER_LOG_ENABLED:
+            return
+        log.info("_flush_browser: triggered")
         usages = get_browser_history()
-        if usages:
-            if self.api.send_browser(usages): log.info(f"Uploaded {len(usages)} browser entries ✓")
+        if not usages:
+            log.debug("_flush_browser: no entries found")
+            return
+        log.info(f"_flush_browser: found {len(usages)} entries")
+        if self.api.send_browser(usages): log.info(f"Uploaded {len(usages)} browser entries ✓")
+        else: log.warning("Browser upload failed — will retry")
 
     def _tick_loop(self):
         while self._run:
             try: self.tracker.tick()
+            except Exception as e: log.debug(f"Tick: {e}")
+            try: self.lock.update()
             except Exception as e: log.debug(f"Tick: {e}")
             time.sleep(1)
 
@@ -418,7 +722,13 @@ if __name__ == "__main__":
         email = input(f"Employee Email [{EMAIL}]: ").strip() or EMAIL
         key   = input(f"API Key [{API_KEY}]: ").strip() or API_KEY
         sint  = input(f"Screenshot interval minutes [{SS_INT}]: ").strip() or str(SS_INT)
-        CFG["agent"].update({"server_url":url,"emp_email":email,"api_key":key,"machine_name":socket.gethostname(),"screenshot_interval_minutes":sint})
+        CFG["agent"].update({
+            "server_url": url,
+            "emp_email": email,
+            "api_key": key,
+            "machine_name": socket.gethostname(),
+            "screenshot_interval_minutes": sint
+        })
         save_config(CFG)
         print(f"✓ Config saved to {CFG_FILE}")
         sys.exit(0)

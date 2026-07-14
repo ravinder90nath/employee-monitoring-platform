@@ -4,6 +4,9 @@ const EmployeeModel = {
   async findAll(filters = {}) {
     let q = `SELECT e.*,
       ws.name AS shift_name,
+      ws.id AS shift_id,
+      ws.start_time AS shift_start,
+      ws.end_time AS shift_end,
       ms.machine_name, ms.ip_address,
       CASE
         WHEN ms.is_active=1 AND ms.session_start > DATE_SUB(NOW(),INTERVAL 5 MINUTE) THEN 'online'
@@ -13,9 +16,12 @@ const EmployeeModel = {
       CASE WHEN ms.session_start IS NOT NULL
            THEN CONCAT(TIMESTAMPDIFF(MINUTE, ms.session_start, NOW()), ' min ago')
            ELSE 'Never' END AS last_signal,
-      ts.is_screenshot_enabled, ts.is_app_log_enabled,
-      ts.is_idle_enabled, ts.is_browser_log_enabled,
-      ts.is_geolocation_enabled, ts.is_tracking_enabled
+      IFNULL(ts.is_screenshot_enabled, 1) AS is_screenshot_enabled,
+      IFNULL(ts.is_app_log_enabled, 1) AS is_app_log_enabled,
+      IFNULL(ts.is_idle_enabled, 1) AS is_idle_enabled,
+      IFNULL(ts.is_browser_log_enabled, 1) AS is_browser_log_enabled,
+      IFNULL(ts.is_geolocation_enabled, 0) AS is_geolocation_enabled,
+      IFNULL(ts.is_tracking_enabled, 1) AS is_tracking_enabled
       FROM employees e
       LEFT JOIN employee_shift_mapping esm ON esm.emp_email = e.emp_email
       LEFT JOIN work_shifts ws ON ws.id = esm.shift_id

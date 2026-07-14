@@ -31,6 +31,7 @@ CREATE TABLE work_shifts (
   working_hours DECIMAL(4,2) DEFAULT 9.00,
   is_default BOOLEAN DEFAULT FALSE,
   created_by VARCHAR(255),
+  day_times JSON NULL,
   staff_count INT DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -41,6 +42,7 @@ CREATE TABLE employee_shift_mapping (
   emp_email VARCHAR(255) NOT NULL,
   shift_id INT NOT NULL,
   assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_emp_email (emp_email),
   FOREIGN KEY (emp_email) REFERENCES employees(emp_email) ON DELETE CASCADE,
   FOREIGN KEY (shift_id) REFERENCES work_shifts(id)
 );
@@ -236,3 +238,55 @@ INSERT INTO apps_master (name,type,category) VALUES
   ('Instagram','Url','distractive'),('Reddit','Url','distractive'),
   ('Spotify','App','distractive'),('Discord','App','distractive'),
   ('github.com','Url','productive'),('stackoverflow.com','Url','productive');
+
+-- ======================================================
+-- MIGRATIONS / FIXES FOR EXISTING DATABASE
+-- These are idempotent fix statements merged from fix_existing_db.sql
+-- Run safely after schema creation to bring existing DB up-to-date
+-- ======================================================
+
+USE desk_watch;
+
+-- 1. (geolocation_logs table already defined above in this file)
+
+-- 2. Auto-assign default shift to employees missing from employee_shift_mapping
+INSERT INTO employee_shift_mapping (emp_email, shift_id)
+SELECT e.emp_email, (SELECT id FROM work_shifts WHERE is_default=1 LIMIT 1)
+FROM employees e
+WHERE e.is_active = 1
+  AND NOT EXISTS (SELECT 1 FROM employee_shift_mapping esm WHERE esm.emp_email = e.emp_email)
+  AND (SELECT id FROM work_shifts WHERE is_default=1 LIMIT 1) IS NOT NULL;
+
+-- 3. Auto-create time_settings for employees missing it
+INSERT IGNORE INTO time_settings (emp_email)
+SELECT emp_email FROM employees WHERE is_active = 1;
+
+-- 4. Fix specific test user intervals (idempotent)
+UPDATE time_settings
+SET screenshot_interval_minutes = 1,
+    app_log_interval_minutes = 1,
+    browser_log_interval_minutes = 5,
+    idle_threshold_minutes = 3
+WHERE emp_email = 'jane.smith@company.com';
+
+-- 5. Update machine_sessions example (commented - run manually if needed)
+-- UPDATE machine_sessions SET session_start = NOW() WHERE emp_email = 'jane.smith@company.com' AND is_active = 1;
+
+-- 6. Populate departments table from employees (fixes dept filter)
+INSERT IGNORE INTO departments (name)
+SELECT DISTINCT department FROM employees WHERE department IS NOT NULL AND department != '';
+
+-- 7. Verification queries (optional checks)
+SELECT 'Employees without shift:' as check_name, COUNT(*) as count
+FROM employees e WHERE is_active=1
+  AND NOT EXISTS (SELECT 1 FROM employee_shift_mapping WHERE emp_email=e.emp_email);
+
+SELECT 'Employees without time_settings:' as check_name, COUNT(*) as count
+FROM employees e WHERE is_active=1
+  AND NOT EXISTS (SELECT 1 FROM time_settings WHERE emp_email=e.emp_email);
+
+SELECT 'Departments populated:' as check_name, COUNT(*) as count FROM departments;
+SELECT 'Apps in master:' as check_name, COUNT(*) as count FROM apps_master;
+SELECT 'Shifts:' as check_name, COUNT(*) as count FROM work_shifts;
+
+SELECT emp_email, screenshot_interval_minutes, app_log_interval_minutes FROM time_settings;

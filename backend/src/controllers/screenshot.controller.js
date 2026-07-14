@@ -20,10 +20,13 @@ const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 const saveScreenshot = async (req, res, next) => {
   try {
     if (!req.file) return fail(res, 'No file uploaded', 400);
-    const { email, machineName, capturedAt, screenIndex } = req.body;
+    const email = req.body.email || req.query.email || 'unknown';
+    const machineName = req.body.machineName || req.query.machineName || '';
+    const capturedAt = req.body.capturedAt || req.query.capturedAt;
+    const screenIndex = parseInt(req.body.screenIndex || req.query.screenIndex) || 1;
     const safeEmail = (email || 'unknown').replace('@', '_').replace(/\./g, '_');
     const filePath = `/uploads/screenshots/${safeEmail}/${req.file.filename}`;
-    const id = await ScreenshotModel.save(email, machineName, filePath, req.file.size, capturedAt, parseInt(screenIndex) || 1);
+    const id = await ScreenshotModel.save(email, machineName, filePath, req.file.size, capturedAt, screenIndex);
     const io = getIO();
     if (io) io.to('dashboard').emit('new_screenshot', { empEmail: email, filePath: `${process.env.BASE_URL || 'http://localhost:5000'}${filePath}`, capturedAt });
     return ok(res, { id, filePath });

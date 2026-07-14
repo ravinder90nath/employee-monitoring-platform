@@ -40,6 +40,8 @@ const TimeSettings = () => {
   const [selEmail,   setSelEmail]   = useState('');
   const [saving,     setSaving]     = useState(false);
   const [saved,      setSaved]      = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState('');
   const [error,      setError]      = useState('');
   const [current,    setCurrent]    = useState({ idle:0, ss:0, app:0, loc:0 });
   const [form,       setForm]       = useState({
@@ -92,6 +94,19 @@ const TimeSettings = () => {
       refetch();
     } catch(e) { setError('Save failed: ' + (e.response?.data?.message || e.message)); }
     setSaving(false);
+  };
+
+  const handleRefreshNow = async () => {
+    if (!selEmail) { setError('Please select an employee'); return; }
+    setRefreshing(true); setRefreshMsg(''); setError('');
+    try {
+      await staffService.refreshAgentSettings(selEmail);
+      setRefreshMsg('Refresh requested. Agent will sync settings shortly.');
+      setTimeout(() => setRefreshMsg(''), 4000);
+    } catch(e) {
+      setError('Refresh failed: ' + (e.response?.data?.message || e.message));
+    }
+    setRefreshing(false);
   };
 
   const SERVICES = [
@@ -186,11 +201,16 @@ const TimeSettings = () => {
           </div>
 
           {/* Save */}
-          <div style={{ display:'flex', justifyContent:'flex-end', alignItems:'center', gap:12 }}>
+          <div style={{ display:'flex', justifyContent:'flex-end', alignItems:'center', gap:12, flexWrap:'wrap' }}>
             {saved && <span style={{ color:'var(--green)', fontWeight:500, fontSize:13 }}>✓ Settings saved!</span>}
+            {refreshMsg && <span style={{ color:'var(--blue)', fontWeight:500, fontSize:13 }}>{refreshMsg}</span>}
+            <button onClick={handleRefreshNow} disabled={refreshing || !selEmail}
+              style={{ background:refreshing?'var(--bg4)':'var(--blue)', color:'#fff', border:'none', borderRadius:8, padding:'10px 22px', fontSize:14, fontWeight:600, cursor:refreshing?'not-allowed':'pointer', display:'flex', alignItems:'center', gap:8 }}>
+              ⟳ {refreshing?'Refreshing...':'Refresh Now'}
+            </button>
             <button onClick={handleSave} disabled={saving}
               style={{ background:saving?'var(--bg4)':'var(--green)', color:'#fff', border:'none', borderRadius:8, padding:'10px 28px', fontSize:14, fontWeight:600, cursor:saving?'not-allowed':'pointer', display:'flex', alignItems:'center', gap:8 }}>
-              ⟳ {saving?'Updating...':'Update Settings'}
+              💾 {saving?'Updating...':'Update Settings'}
             </button>
           </div>
         </>

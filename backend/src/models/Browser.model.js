@@ -17,6 +17,11 @@ const BrowserModel = {
       }
     }
   },
+
+  async getRange(email, from, to) {
+    const [rows] = await db.query('SELECT * FROM browser_history WHERE emp_email=? AND log_date BETWEEN ? AND ? ORDER BY created_at DESC', [email, from, to]);
+    return rows;
+  },
 };
 
 module.exports = BrowserModel;

@@ -3,7 +3,10 @@ const db = require('../config/database');
 const TimeSettingsModel = {
   async get(email) {
     const [rows] = await db.query('SELECT * FROM time_settings WHERE emp_email=?', [email]);
-    return rows[0] || null;
+    if (rows.length) return rows[0];
+    await db.query('INSERT IGNORE INTO time_settings (emp_email) VALUES (?)', [email]);
+    const [newRows] = await db.query('SELECT * FROM time_settings WHERE emp_email=?', [email]);
+    return newRows[0] || null;
   },
 
   async upsert(email, d) {
@@ -37,7 +40,21 @@ const TimeSettingsModel = {
   },
 
   async toggle(email, service, value) {
-    await db.query(`UPDATE time_settings SET ${service}=? WHERE emp_email=?`, [value, email]);
+    const allowed = new Set([
+      'is_screenshot_enabled',
+      'is_app_log_enabled',
+      'is_browser_log_enabled',
+      'is_idle_enabled',
+      'is_geolocation_enabled',
+      'is_tracking_enabled',
+    ]);
+    if (!allowed.has(service)) {
+      throw new Error('Invalid service');
+    }
+    await db.query(
+      `INSERT INTO time_settings (emp_email, ${service}) VALUES (?, ?) ON DUPLICATE KEY UPDATE ${service}=VALUES(${service})`,
+      [email, value],
+    );
   },
 };
 

@@ -9,6 +9,9 @@ import WorkStatsRow  from './components/WorkStatsRow';
 import ActivitiesPanel from './components/ActivitiesPanel';
 import ScreenshotsPanel from './components/ScreenshotsPanel';
 import WeeklyView    from './components/WeeklyView';
+import BrowserHistoryPanel from './components/BrowserHistoryPanel';
+import { browserService } from '../../../services/browser.service';
+import AppLogsPanel from './components/AppLogsPanel';
 import { today, weekAgo } from '../../../utils/helpers';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
@@ -30,9 +33,13 @@ const StaffDashboard = () => {
   const [viewMode,   setViewMode]   = useState('Day');
   const [activeTab,  setActiveTab]  = useState('activities');
   const [appData,    setAppData]    = useState([]);
+  const [appLogs,    setAppLogs]    = useState([]);
   const [sessions,   setSessions]   = useState([]);
   const [network,    setNetwork]    = useState(null);
   const [idleMins,   setIdleMins]   = useState(0);
+  const [idleLogs,   setIdleLogs]   = useState([]);
+  const [browserRows,setBrowserRows] = useState([]);
+  const [agentLogs, setAgentLogs] = useState([]);
   const [dataLoading,setDataLoading]= useState(false);
 
   const from = viewMode === 'Week'
@@ -43,6 +50,7 @@ const StaffDashboard = () => {
     : date;
 
   const { employees } = useEmployeeList();
+  const selectedEmployee = employees.find(e => e.emp_email === selEmail);
 
   useEffect(() => {
     if (employees.length && !selEmail) setSelEmail(employees[0].emp_email);
@@ -58,15 +66,32 @@ const StaffDashboard = () => {
       authFetch(`${API_URL}/idle?email=${selEmail}&from=${from}&to=${to}`).catch(() => null),
     ]).then(([appResp, sessResp, netResp, idleResp]) => {
       setAppData(appResp?.aggregated || []);
+      const rawGroup = Array.isArray(appResp?.raw)
+        ? (appResp.raw.find(g => g.employeeEmail === selEmail) || appResp.raw[0] || { appdata: [] })
+        : { appdata: [] };
+      setAppLogs(Array.isArray(rawGroup.appdata) ? rawGroup.appdata : []);
       setSessions(Array.isArray(sessResp) ? sessResp : []);
       const nets = Array.isArray(netResp) ? netResp : [];
       setNetwork(nets.find(n => n.empEmail === selEmail || n.emp_email === selEmail) || null);
       if (idleResp) {
         const arr   = Array.isArray(idleResp) ? idleResp : (idleResp?.data || []);
+        setIdleLogs(arr);
         const total = arr.reduce((s, r) => s + (parseFloat(r.duration_minutes) || 0), 0);
         setIdleMins(total);
-      } else { setIdleMins(0); }
+      } else { setIdleLogs([]); setIdleMins(0); }
     }).catch(() => {}).finally(() => setDataLoading(false));
+  }, [selEmail, from, to]);
+
+  useEffect(() => {
+    if (!selEmail) return;
+    const f = from, t = to;
+    browserService.get(selEmail, f, t).then(resp => {
+      const rows = resp?.data || resp || [];
+      setBrowserRows(Array.isArray(rows) ? rows : (rows.data || []));
+    }).catch(() => setBrowserRows([]));
+    // fetch agent logs for date range
+    // keep agentLogs for other uses; app data shown in App Logs tab
+    // adminService.getAgentLogs(f, t).then(r => setAgentLogs(r?.data || r || [])).catch(() => setAgentLogs([]));
   }, [selEmail, from, to]);
 
   const { data: rawShots, loading: ssLoading } = useFetch(
@@ -108,7 +133,16 @@ const StaffDashboard = () => {
           ))}
         </div>
 
-        <TimelineBar apps={appData} idleMins={idleMins} />
+        <TimelineBar
+          apps={appData}
+          appLogs={appLogs}
+          idleLogs={idleLogs}
+          sessions={sessions}
+          shiftStart={selectedEmployee?.shift_start}
+          shiftEnd={selectedEmployee?.shift_end}
+          date={date}
+          idleMins={idleMins}
+        />
 
         <WorkStatsRow
           sessions={sessions} idleMins={idleMins}
@@ -122,9 +156,13 @@ const StaffDashboard = () => {
           <TabBtn active={activeTab==='screenshots'} onClick={() => setActiveTab('screenshots')} icon="🖥" label="Screenshots"/>
           <TabBtn active={activeTab==='location'}    onClick={() => setActiveTab('location')}    icon="📍" label="Location"/>
           {viewMode==='Week' && <TabBtn active={activeTab==='weekly'} onClick={() => setActiveTab('weekly')} icon="📅" label="Weekly View"/>}
+          <TabBtn active={activeTab==='browser'} onClick={() => setActiveTab('browser')} icon="🌐" label="Browser"/>
+          <TabBtn active={activeTab==='agentlogs'} onClick={() => setActiveTab('agentlogs')} icon="📝" label="App Logs"/>
         </div>
 
         {activeTab === 'activities'  && (dataLoading ? <LoadingCenter msg="Loading activities..."/> : <ActivitiesPanel apps={appData} idleMins={idleMins}/>)}
+        {activeTab === 'browser' && <BrowserHistoryPanel rows={browserRows} />}
+        {activeTab === 'agentlogs' && <AppLogsPanel aggregated={appData} />}
         {activeTab === 'screenshots' && (ssLoading   ? <LoadingCenter msg="Loading screenshots..."/> : <ScreenshotsPanel shots={shots} date={date}/>)}
         {activeTab === 'location'    && (
           <div style={{ textAlign:'center', padding:'40px', color:'var(--text2)' }}>

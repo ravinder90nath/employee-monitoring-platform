@@ -3,7 +3,7 @@ import { authService } from "../../services/auth.service";
 import { staffService } from "../../services/staff.service";
 import useFetch from "../../hooks/useFetch";
 import useDeptTitles from "../../hooks/useDeptTitles";
-import { Avatar, LoadingCenter, EmptyState } from "../../components/common";
+import { Avatar, LoadingCenter, EmptyState, Confirm, Alert } from "../../components/common";
 
 const UserManagement = () => {
   const [dept, setDept] = useState("");
@@ -48,20 +48,19 @@ const UserManagement = () => {
       });
       refetch();
     } catch (e) {
-      alert("Toggle failed: " + e.message);
+      setAlertMsg("Toggle failed: " + e.message);
     }
     setMenu(null);
   };
 
+  const [confirm, setConfirm] = useState({ open:false, message:'', onConfirm:null });
+  const [alertMsg, setAlertMsg] = useState(null);
+
   const del = async (email) => {
-    if (!window.confirm(`Delete ${email}?`)) return;
-    try {
-      await staffService.deleteEmployee(email);
-      refetch();
-    } catch (e) {
-      alert(e.message);
-    }
-    setMenu(null);
+    setConfirm({ open:true, message:`Delete ${email}?`, onConfirm: async () => {
+      try { await staffService.deleteEmployee(email); refetch(); } catch(e) { setAlertMsg(e.message); }
+      setMenu(null);
+    } });
   };
 
   const StatusBadge = ({ status }) => {
@@ -99,46 +98,47 @@ const UserManagement = () => {
     );
   };
 
-  const ACTIONS = [
+  const getActions = (e) => [
     {
-      label: "Disable All Tracking",
-      icon: "🔴",
-      color: "var(--red)",
-      fn: (e) => toggle(e, "is_tracking_enabled", false),
+      label: e.isTracking !== false ? 'Disable All Tracking' : 'Enable All Tracking',
+      icon: e.isTracking !== false ? '🔴' : '🟢',
+      color: e.isTracking !== false ? 'var(--red)' : 'var(--green)',
+      fn: () => toggle(e.empEmail, 'is_tracking_enabled', e.isTracking === false),
     },
     {
-      label: "Enable Screenshot",
-      icon: "📷",
-      color: "var(--text)",
-      fn: (e) => toggle(e, "is_screenshot_enabled", true),
+      label: e.isScreenShotDisable ? 'Enable Screenshot' : 'Disable Screenshot',
+      icon: '📷',
+      color: e.isScreenShotDisable ? 'var(--green)' : 'var(--text)',
+      fn: () => toggle(e.empEmail, 'is_screenshot_enabled', e.isScreenShotDisable),
     },
     {
-      label: "Enable App Logging",
-      icon: "📋",
-      color: "var(--text)",
-      fn: (e) => toggle(e, "is_app_log_enabled", true),
+      label: e.isApplogDisable ? 'Enable App Logging' : 'Disable App Logging',
+      icon: '📋',
+      color: e.isApplogDisable ? 'var(--green)' : 'var(--text)',
+      fn: () => toggle(e.empEmail, 'is_app_log_enabled', e.isApplogDisable),
     },
     {
-      label: "Disable Idle Tracking",
-      icon: "⏸",
-      color: "var(--red)",
-      fn: (e) => toggle(e, "is_idle_enabled", false),
+      label: e.isIdleDisable ? 'Enable Idle Tracking' : 'Disable Idle Tracking',
+      icon: '⏸',
+      color: e.isIdleDisable ? 'var(--green)' : 'var(--text)',
+      fn: () => toggle(e.empEmail, 'is_idle_enabled', e.isIdleDisable),
     },
     {
-      label: "Enable Location",
-      icon: "📍",
-      color: "var(--green)",
-      fn: (e) => toggle(e, "is_geolocation_enabled", true),
+      label: e.isGeolocationDisable ? 'Enable Location' : 'Disable Location',
+      icon: '📍',
+      color: e.isGeolocationDisable ? 'var(--green)' : 'var(--text)',
+      fn: () => toggle(e.empEmail, 'is_geolocation_enabled', e.isGeolocationDisable),
     },
     {
-      label: "Delete Employee",
-      icon: "🗑",
-      color: "var(--red)",
-      fn: (e) => del(e),
+      label: 'Delete Employee',
+      icon: '🗑',
+      color: 'var(--red)',
+      fn: () => del(e.empEmail),
     },
   ];
 
   return (
+    <>
     <div>
       <div
         style={{
@@ -380,10 +380,10 @@ const UserManagement = () => {
                               overflow: "hidden",
                             }}
                           >
-                            {ACTIONS.map((a, idx) => (
+                            {getActions(e).map((a, idx) => (
                               <div
                                 key={idx}
-                                onClick={() => a.fn(e.empEmail)}
+                                onClick={a.fn}
                                 style={{
                                   display: "flex",
                                   alignItems: "center",
@@ -393,7 +393,7 @@ const UserManagement = () => {
                                   color: a.color,
                                   fontSize: 12,
                                   borderBottom:
-                                    idx < ACTIONS.length - 1
+                                    idx < getActions(e).length - 1
                                       ? "1px solid var(--border)"
                                       : "none",
                                 }}
@@ -422,6 +422,9 @@ const UserManagement = () => {
         )}
       </div>
     </div>
+    <Confirm open={confirm.open} message={confirm.message} onClose={() => setConfirm({open:false})} onConfirm={confirm.onConfirm} />
+    <Alert open={!!alertMsg} message={alertMsg||''} onClose={() => setAlertMsg(null)} />
+    </>
   );
 };
 

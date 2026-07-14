@@ -136,3 +136,44 @@ export const Table = ({ columns=[], data=[], onRowClick, emptyMsg='No data' }) =
     </table>
   </div>
 );
+
+export const Confirm = ({ open, title='Confirm', message, onClose, onConfirm }) => {
+  if (!open) return null;
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose?.()}>
+      <div className="modal fade-in" style={{maxWidth:520}}>
+        <div className="modal-header">
+          <div className="modal-title">{title}</div>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div style={{ fontSize:14 }}>{message}</div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-danger" onClick={() => { onConfirm?.(); onClose?.(); }}>Confirm</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export const Alert = ({ open, title='Alert', message, onClose }) => {
+  if (!open) return null;
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose?.()}>
+      <div className="modal fade-in" style={{maxWidth:520}}>
+        <div className="modal-header">
+          <div className="modal-title">{title}</div>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div style={{ fontSize:14 }}>{message}</div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-primary" onClick={onClose}>OK</button>
+        </div>
+      </div>
+    </div>
+  );
+};
