@@ -810,7 +810,7 @@ class LockMonitor:
                 return
             if current_locked != self._locked:
                 self._locked = current_locked
-                event = "locked" if current_locked else "unlocked"
+                event = "lock" if current_locked else "unlock"
                 if self.api.send_lock_unlock(event, now_iso()):
                     log.info(f"Uploaded lock state: {event} ✓")
                 else:
