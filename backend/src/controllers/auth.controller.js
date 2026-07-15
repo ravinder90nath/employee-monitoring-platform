@@ -62,6 +62,9 @@ const getEmployeeList = async (req, res, next) => {
       photo: e.photo,
       shift_name: e.shift_name || 'Default Shift',
       shift_id: e.shift_id || null,
+      shift_start: e.shift_start || '09:00:00',
+      shift_end: e.shift_end || '18:00:00',
+      working_hours: e.working_hours || 9.00,
     })));
   } catch (e) { next(e); }
 };

@@ -242,10 +242,10 @@ const UserManagement = () => {
                 <tr>
                   <th>Employee</th>
                   <th>Status</th>
+                  <th>Last Signal</th>
                   <th>Working Shift</th>
                   <th>Computer</th>
                   <th>IP</th>
-                  <th>Last Signal</th>
                   <th>Tracking</th>
                   <th>Actions</th>
                 </tr>
@@ -274,6 +274,22 @@ const UserManagement = () => {
                     </td>
                     <td>
                       <StatusBadge status={e.status} />
+                    </td>
+                    
+                    <td>
+                      <span
+                        style={{
+                          fontSize: 12,
+                          color:
+                            e.status === "online"
+                              ? "var(--green)"
+                              : e.status === "idle"
+                                ? "var(--yellow)"
+                                : "var(--text2)",
+                        }}
+                      >
+                        {e.lastSignal || "Never"}
+                      </span>
                     </td>
                     <td>
                       {e.shiftName && e.shiftName !== "Default Shift" ? (
@@ -313,21 +329,6 @@ const UserManagement = () => {
                       ) : (
                         <span style={{ color: "var(--text3)" }}>—</span>
                       )}
-                    </td>
-                    <td>
-                      <span
-                        style={{
-                          fontSize: 12,
-                          color:
-                            e.status === "online"
-                              ? "var(--green)"
-                              : e.status === "idle"
-                                ? "var(--yellow)"
-                                : "var(--text2)",
-                        }}
-                      >
-                        {e.lastSignal || "Never"}
-                      </span>
                     </td>
                     <td>
                       <span

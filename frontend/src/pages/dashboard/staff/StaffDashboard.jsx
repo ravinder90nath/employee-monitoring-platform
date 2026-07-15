@@ -126,7 +126,7 @@ const StaffDashboard = () => {
       <div className="card card-pad">
         {/* Legend */}
         <div style={{ display:'flex', gap:16, alignItems:'center', marginBottom:10 }}>
-          {[['#3fb950','Productive'],['#f85149','Distracting'],['#e3b341','No Activity']].map(([c,l]) => (
+          {[['#3fb950','Productive'],['#f85149','Distracting'],['#e3b341','No Activity'],['#6e7681','Offline']].map(([c,l]) => (
             <div key={l} style={{ display:'flex', alignItems:'center', gap:6, fontSize:12 }}>
               <div style={{ width:12, height:12, borderRadius:2, background:c }}/><span style={{ color:'var(--text2)' }}>{l}</span>
             </div>
@@ -146,8 +146,14 @@ const StaffDashboard = () => {
 
         <WorkStatsRow
           sessions={sessions} idleMins={idleMins}
+          appLogs={appLogs}
+          idleLogs={idleLogs}
           networkUp={network?.totalUploadBytes || network?.total_upload_bytes || 0}
           networkDown={network?.totalDownloadBytes || network?.total_download_bytes || 0}
+          shiftStart={selectedEmployee?.shift_start}
+          shiftEnd={selectedEmployee?.shift_end}
+          workingHours={selectedEmployee?.working_hours}
+          date={date}
         />
 
         {/* Tabs */}
