@@ -19,5 +19,6 @@ router.put('/apps/:id',        ctrl.updateAppCat);
 router.get('/timesettings',            ctrl.getTimeSettings);
 router.post('/timesettings/toggle',    ctrl.toggleService);   // must be before /
 router.post('/timesettings',           ctrl.updateTimeSettings);
+router.post('/timesettings/refresh',   ctrl.refreshAgentSettings);
 
 module.exports = router;

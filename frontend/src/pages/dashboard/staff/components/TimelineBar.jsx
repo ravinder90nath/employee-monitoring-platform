@@ -88,26 +88,23 @@ const TimelineBar = ({ appLogs = [], idleLogs = [], sessions = [], shiftStart, s
   const dateBase = date ? new Date(`${date}T00:00:00`) : new Date();
   const range = normalizeRange(dateBase, shiftStart, shiftEnd, segments);
   const totalMinutes = Math.max(1, (range.end.getTime() - range.start.getTime()) / 60000);
-
-  if (!segments.length) return (
-    <div style={{ height:32, background:'var(--bg4)', borderRadius:6, display:'flex', alignItems:'center', justifyContent:'center', marginBottom:8 }}>
-      <span style={{ fontSize:12, color:'var(--text3)' }}>No activity data for this date</span>
-    </div>
-  );
+  const hasSegments = segments.length > 0;
 
   const ticks = [range.start, new Date((range.start.getTime() + range.end.getTime()) / 2), range.end];
 
   return (
     <div style={{ marginBottom:14 }}>
       <div style={{ position:'relative', height:32, borderRadius:8, overflow:'hidden', background:'var(--bg4)', border:'1px solid var(--border)' }}>
-        {segments.map((seg, idx) => {
+        {hasSegments ? segments.map((seg, idx) => {
           const left = ((seg.start.getTime() - range.start.getTime()) / (range.end.getTime() - range.start.getTime())) * 100;
           const width = ((seg.end.getTime() - seg.start.getTime()) / (range.end.getTime() - range.start.getTime())) * 100;
           return (
             <div key={idx} title={`${seg.label} • ${fmt.time(seg.start)} - ${fmt.time(seg.end)}`}
               style={{ position:'absolute', left:`${left}%`, width:`${width}%`, top:0, bottom:0, background:seg.color, minWidth:1 }}/>
           );
-        })}
+        }) : (
+          <div style={{ position:'absolute', left:0, right:0, top:0, bottom:0, background:'rgba(125,133,144,0.08)' }}/>
+        )}
       </div>
       <div style={{ display:'flex', justifyContent:'space-between', marginTop:8, fontSize:11, color:'var(--text2)' }}>
         {ticks.map((tick, idx) => (

@@ -65,7 +65,12 @@ const EmployeeModel = {
   },
 
   async getList() {
-    const [rows] = await db.query('SELECT emp_email, emp_name, photo FROM employees WHERE is_active=1 ORDER BY emp_name');
+    const [rows] = await db.query(`SELECT e.emp_email, e.emp_name, e.photo,
+      ws.name AS shift_name, ws.start_time AS shift_start, ws.end_time AS shift_end
+      FROM employees e
+      LEFT JOIN employee_shift_mapping esm ON esm.emp_email = e.emp_email
+      LEFT JOIN work_shifts ws ON ws.id = esm.shift_id
+      WHERE e.is_active = 1 ORDER BY e.emp_name`);
     return rows;
   },
 

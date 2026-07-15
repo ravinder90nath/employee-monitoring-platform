@@ -15,17 +15,23 @@ import os, sys, json, time, uuid, socket, sqlite3, logging, subprocess, getpass
 import threading, schedule, platform, configparser
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+import warnings
+warnings.filterwarnings('ignore', category=DeprecationWarning)
 
 IS_WIN = platform.system() == "Windows"
-WIN32_OK = PIL_OK = False
+WIN32_OK = PIL_OK = PSUTIL_OK = False
 
 if IS_WIN:
     try:
         import win32gui, win32process
-        import psutil
         WIN32_OK = True
     except ImportError:
-        print("WARNING: pip install pywin32 psutil")
+        print("WARNING: pip install pywin32")
+    try:
+        import psutil
+        PSUTIL_OK = True
+    except ImportError:
+        print("WARNING: pip install psutil")
     try:
         from PIL import ImageGrab
         PIL_OK = True
@@ -133,6 +139,13 @@ def init_db():
         CREATE TABLE IF NOT EXISTS ss_buffer(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             file_path TEXT, captured_at TEXT, uploaded INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS request_buffer(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            endpoint TEXT,
+            payload TEXT,
+            created_at TEXT,
+            uploaded INTEGER DEFAULT 0,
+            attempts INTEGER DEFAULT 0);
     """)
     c.commit(); c.close()
 
@@ -143,6 +156,43 @@ def now_iso():
 def get_ip():
     try: return socket.gethostbyname(socket.gethostname())
     except: return "127.0.0.1"
+
+def buffer_request(endpoint, data):
+    try:
+        c = sqlite3.connect(DB_FILE)
+        c.execute(
+            "INSERT INTO request_buffer (endpoint,payload,created_at) VALUES (?,?,?)",
+            (endpoint, json.dumps(data, ensure_ascii=False), now_iso())
+        )
+        c.commit(); c.close()
+        log.warning(f"Buffered request {endpoint}")
+    except Exception as e:
+        log.debug(f"Buffer request failed: {e}")
+
+def retry_buffered_requests(api):
+    if not REQUESTS_OK:
+        return
+    try:
+        c = sqlite3.connect(DB_FILE)
+        rows = c.execute(
+            "SELECT id, endpoint, payload, attempts FROM request_buffer WHERE uploaded=0 ORDER BY created_at LIMIT 20"
+        ).fetchall()
+        for rid, endpoint, payload, attempts in rows:
+            try:
+                data = json.loads(payload)
+            except Exception:
+                data = None
+            if data is None:
+                c.execute("UPDATE request_buffer SET uploaded=1 WHERE id=?", (rid,))
+                continue
+            if api.post(endpoint, data):
+                c.execute("UPDATE request_buffer SET uploaded=1 WHERE id=?", (rid,))
+                log.info(f"Retried buffered request {endpoint} ✓")
+            else:
+                c.execute("UPDATE request_buffer SET attempts=attempts+1 WHERE id=?", (rid,))
+        c.commit(); c.close()
+    except Exception as e:
+        log.debug(f"Retry buffered requests: {e}")
 
 FRIENDLY = {
     "chrome":"Google Chrome","msedge":"Microsoft Edge","firefox":"Mozilla Firefox",
@@ -189,52 +239,194 @@ def take_screenshot():
     except Exception as e: log.error(f"Screenshot: {e}"); return None
 
 def get_browser_history():
+    """Extract browser history from Chrome/Edge with robust error handling."""
     entries = []
-    if not IS_WIN: return entries
+    if not IS_WIN:
+        return entries
+    
     try:
-        import shutil, sqlite3 as sq
-        local = Path(os.environ.get("LOCALAPPDATA",""))
-        cutoff = int((datetime.now()-timedelta(minutes=BROWSER_INT)).timestamp()*1e6+11644473600*1e6)
-        # detect available browser profile folders dynamically
-        bases = [("Chrome", local/"Google/Chrome/User Data"), ("Edge", local/"Microsoft/Edge/User Data")]
-        for browser, base in bases:
-            if not base.exists(): continue
-            for prof in [p for p in base.iterdir() if p.is_dir()]:
-                h = prof / "History"
-                if not h.exists(): continue
+        import shutil, sqlite3 as sq, time as tm
+        
+        local = Path(os.environ.get("LOCALAPPDATA", ""))
+        if not local.exists():
+            log.warning("LOCALAPPDATA not found")
+            return entries
+        
+        # Calculate cutoff timestamp for filtering recent history
+        # Chrome stores timestamps as 100-nanosecond intervals since 1601-01-01
+        now_unix = datetime.now(timezone.utc).timestamp()  # seconds since 1970
+        cutoff_unix = now_unix - (BROWSER_INT * 60)  # subtract interval in seconds
+        cutoff_filetime = int((cutoff_unix + 11644473600) * 10000000)  # convert to FILETIME
+        
+        log.info(f"Browser history: scanning for entries from last {BROWSER_INT} minutes (cutoff: {cutoff_filetime})")
+        
+        # Browser paths to check
+        browsers = [
+            ("Chrome", local / "Google" / "Chrome" / "User Data"),
+            ("Edge", local / "Microsoft" / "Edge" / "User Data")
+        ]
+        
+        for browser_name, base_path in browsers:
+            if not base_path.exists():
+                log.debug(f"{browser_name}: path not found ({base_path})")
+                continue
+            
+            # Get valid user profiles (skip system profiles)
+            try:
+                all_dirs = list(base_path.iterdir())
+                profiles = [
+                    p for p in all_dirs
+                    if p.is_dir() and p.name not in ['System Profile', 'Guest Profile', 'Default Guest Profile']
+                ]
+                
+                if not profiles:
+                    log.warning(f"{browser_name}: no user profiles found in {base_path}")
+                    continue
+                    
+                log.info(f"{browser_name}: found {len(profiles)} profile(s)")
+            except Exception as e:
+                log.error(f"{browser_name}: failed to list profiles: {e}")
+                continue
+            
+            # Process each profile
+            for profile_path in profiles:
+                profile_name = profile_path.name
+                history_db = profile_path / "History"
+                
+                if not history_db.exists():
+                    log.debug(f"{browser_name}/{profile_name}: no History database")
+                    continue
+                
                 try:
-                    tmp = APP_DIR/f"hist_{browser}_{prof.name}.db"
-                    shutil.copy2(str(h), str(tmp))
-                    con = sq.connect(str(tmp))
-                    # Try multiple query patterns to be compatible with different Chromium versions
-                    rows = []
+                    # Create temporary copy to avoid locking issues
+                    temp_db = APP_DIR / f"temp_hist_{browser_name}_{profile_name}_{int(tm.time())}.db"
+                    log.debug(f"Copying {history_db} → {temp_db}")
+                    
                     try:
-                        rows = con.execute(
-                            "SELECT u.url, IFNULL(v.visit_duration,0), v.visit_time FROM visits v JOIN urls u ON v.url=u.id WHERE v.visit_time>? LIMIT 200",
-                            (cutoff,)
+                        shutil.copy2(str(history_db), str(temp_db))
+                    except PermissionError as pe:
+                        log.error(f"{browser_name}/{profile_name}: access denied (browser may be running): {pe}")
+                        continue
+                    except Exception as ce:
+                        log.error(f"{browser_name}/{profile_name}: copy failed: {ce}")
+                        continue
+                    
+                    if not temp_db.exists():
+                        log.error(f"{browser_name}/{profile_name}: temp file not created")
+                        continue
+                    
+                    # Open database with URI to handle WAL mode
+                    try:
+                        con = sq.connect(f"file:{temp_db}?mode=ro&uri=true", timeout=15)
+                        con.execute("PRAGMA query_only = ON")
+                        con.execute("PRAGMA busy_timeout = 10000")  # 10 second timeout for busy database
+                    except Exception as de:
+                        # Fallback to standard connection
+                        log.debug(f"URI connection failed, trying standard: {de}")
+                        con = sq.connect(str(temp_db), timeout=15)
+                        con.execute("PRAGMA query_only = ON")
+                    
+                    # Query browser history
+                    profile_rows = []
+                    query_success = False
+                    
+                    # Try primary query (visits + urls JOIN)
+                    try:
+                        profile_rows = con.execute(
+                            "SELECT u.url, COALESCE(v.visit_duration, 0) as visit_dur, v.visit_time "
+                            "FROM visits v JOIN urls u ON v.url = u.id "
+                            "WHERE v.visit_time > ? "
+                            "ORDER BY v.visit_time DESC LIMIT 500",
+                            (cutoff_filetime,)
                         ).fetchall()
-                    except Exception:
+                        query_success = True
+                        log.info(f"{browser_name}/{profile_name}: primary query returned {len(profile_rows)} rows")
+                    except sq.OperationalError as oe:
+                        log.debug(f"{browser_name}/{profile_name}: primary query failed (table missing): {oe}")
+                    except Exception as qe:
+                        log.debug(f"{browser_name}/{profile_name}: primary query error: {qe}")
+                    
+                    # Fallback to simpler query
+                    if not query_success or len(profile_rows) == 0:
                         try:
-                            rows = con.execute(
-                                "SELECT url, 0 as visit_duration, last_visit_time as visit_time FROM urls WHERE last_visit_time>? LIMIT 200",
-                                (cutoff,)
+                            profile_rows = con.execute(
+                                "SELECT url, 0 as visit_dur, last_visit_time "
+                                "FROM urls WHERE last_visit_time > ? "
+                                "ORDER BY last_visit_time DESC LIMIT 500",
+                                (cutoff_filetime,)
                             ).fetchall()
-                        except Exception:
-                            rows = []
-                    con.close(); tmp.unlink(missing_ok=True)
-                    for url, dur, vtime in rows:
+                            query_success = True
+                            log.info(f"{browser_name}/{profile_name}: fallback query returned {len(profile_rows)} rows")
+                        except Exception as fe:
+                            log.warning(f"{browser_name}/{profile_name}: fallback query also failed: {fe}")
+                    
+                    con.close()
+                    
+                    # Process query results
+                    profile_count = 0
+                    for row in profile_rows:
                         try:
-                            # convert chromium timestamp (microseconds since 1601) to unix
-                            ts = None
-                            if isinstance(vtime, (int, float)) and vtime > 1000000000000:
-                                ts = datetime.fromtimestamp(vtime/1e6 - 11644473600, timezone.utc).isoformat()
-                            else:
-                                ts = datetime.now(timezone.utc).isoformat()
-                        except: ts = datetime.now(timezone.utc).isoformat()
-                        entries.append({"url": url, "durationInMinutes": round((dur or 0)/60000000, 2) if isinstance(dur, (int, float)) else 0, "browser": browser, "createdAt": ts})
+                            url = str(row[0]) if row[0] else None
+                            duration_ns = row[1] if len(row) > 1 and row[1] else 0
+                            visit_time = row[2] if len(row) > 2 else 0
+                            
+                            # Validate URL
+                            if not url or len(url.strip()) == 0:
+                                continue
+                            
+                            # Handle very long URLs
+                            if len(url) > 2000:
+                                url = url[:2000]
+                            
+                            # Convert visit_time from FILETIME to ISO string
+                            try:
+                                if isinstance(visit_time, (int, float)) and visit_time > 11644473600000000:
+                                    # Valid FILETIME
+                                    unix_sec = (visit_time / 10000000.0) - 11644473600
+                                    visit_dt = datetime.fromtimestamp(unix_sec, tz=timezone.utc)
+                                    created_at = visit_dt.isoformat()
+                                else:
+                                    created_at = datetime.now(timezone.utc).isoformat()
+                            except (ValueError, OSError) as te:
+                                log.debug(f"Timestamp {visit_time} conversion failed: {te}")
+                                created_at = datetime.now(timezone.utc).isoformat()
+                            
+                            # Convert duration from nanoseconds to minutes
+                            dur_minutes = float(duration_ns) / 60000000.0 if duration_ns > 0 else 0.0
+                            dur_minutes = round(dur_minutes, 2)
+                            
+                            entries.append({
+                                "url": url,
+                                "durationInMinutes": dur_minutes,
+                                "browser": browser_name,
+                                "createdAt": created_at
+                            })
+                            profile_count += 1
+                            
+                        except Exception as pe:
+                            log.debug(f"Parse error for row: {pe}")
+                            continue
+                    
+                    log.info(f"{browser_name}/{profile_name}: extracted {profile_count} entries")
+                    
                 except Exception as e:
-                    log.debug(f"Browser history read failed for {h}: {e}")
-    except Exception as e: log.debug(f"Browser history: {e}")
+                    log.error(f"{browser_name}/{profile_name}: extraction error: {e}", exc_info=True)
+                finally:
+                    # Clean up temp file
+                    try:
+                        if temp_db.exists():
+                            temp_db.unlink()
+                    except Exception:
+                        pass
+        
+    except Exception as e:
+        log.error(f"Browser history extraction failed: {e}", exc_info=True)
+    
+    if entries:
+        log.info(f"Browser history: total {len(entries)} entries collected")
+    else:
+        log.warning("Browser history: no entries found")
+    
     return entries
 
 def get_installed_software():
@@ -261,16 +453,16 @@ def get_system_info():
         info['hostname'] = socket.gethostname()
         info['username'] = os.getlogin() if hasattr(os, 'getlogin') else None
         info['ip'] = get_ip()
-        try:
-            import psutil
-            info['cpu_count'] = psutil.cpu_count(logical=True)
-            info['total_memory'] = getattr(psutil.virtual_memory(), 'total', None)
-            du = psutil.disk_usage(str(Path.home()))
-            info['disk_total'] = du.total
-            info['disk_free'] = du.free
-            info['boot_time'] = datetime.fromtimestamp(psutil.boot_time(), timezone.utc).isoformat()
-        except Exception:
-            pass
+        if PSUTIL_OK:
+            try:
+                info['cpu_count'] = psutil.cpu_count(logical=True)
+                info['total_memory'] = getattr(psutil.virtual_memory(), 'total', None)
+                du = psutil.disk_usage(str(Path.home()))
+                info['disk_total'] = du.total
+                info['disk_free'] = du.free
+                info['boot_time'] = datetime.fromtimestamp(psutil.boot_time(), timezone.utc).isoformat()
+            except Exception as e:
+                log.debug(f"psutil info: {e}")
         info['installed_software'] = get_installed_software()
     except Exception as e:
         log.debug(f"get_system_info error: {e}")
@@ -328,14 +520,20 @@ class API:
         self.s = requests.Session() if REQUESTS_OK else None
         self.h = {"X-Api-Key":API_KEY,"Content-Type":"application/json"}
 
-    def post(self, path, data):
+    def post(self, path, data, retries=2):
         if not REQUESTS_OK: return False
-        try:
-            r = self.s.post(f"{SERVER}{path}",json=data,headers=self.h,timeout=20)
-            ok = r.status_code in (200,201)
-            if not ok: log.debug(f"POST {path} → {r.status_code}: {r.text[:200]}")
-            return ok
-        except Exception as e: log.debug(f"POST {path}: {e}"); return False
+        for attempt in range(1, retries + 1):
+            try:
+                r = self.s.post(f"{SERVER}{path}", json=data, headers=self.h, timeout=20)
+                ok = r.status_code in (200, 201)
+                if not ok:
+                    log.debug(f"POST {path} → {r.status_code}: {r.text[:200]}")
+                return ok
+            except Exception as e:
+                log.debug(f"POST {path}: {e}")
+                if attempt < retries:
+                    time.sleep(1)
+        return False
 
     def post_file(self, path, files, data):
         if not REQUESTS_OK: return False
@@ -400,17 +598,32 @@ class API:
         self.post("/api/admin/savelogs",{"empEmail":EMAIL,"machineName":MACHINE,"eventType":etype,"eventData":data,"createdAt":now_iso()})
 
     def send_apps(self, apps):
-        return self.post("/api/applog/saveapplog",{"email":EMAIL,"machineName":MACHINE,"createdAt":now_iso(),"apps":apps})
+        payload = {"email":EMAIL,"machineName":MACHINE,"createdAt":now_iso(),"apps":apps}
+        if self.post("/api/applog/saveapplog", payload):
+            return True
+        buffer_request("/api/applog/saveapplog", payload)
+        return False
 
     def send_browser(self, usages):
-        return self.post("/api/browserhistory/savebrowserusages",{"email":EMAIL,"machineName":MACHINE,"createdAt":now_iso(),"usage":usages})
+        payload = {"email":EMAIL,"machineName":MACHINE,"createdAt":now_iso(),"usage":usages}
+        log.info(f"Sending browser history: {len(usages)} entries to {EMAIL}")
+        if self.post("/api/browserhistory/savebrowserusages", payload):
+            log.info(f"Browser history sent ✓ ({len(usages)} entries)")
+            return True
+        log.warning(f"Browser history upload failed, buffering {len(usages)} entries")
+        buffer_request("/api/browserhistory/savebrowserusages", payload)
+        return False
 
     def send_idle(self, start, end, minutes):
         if minutes < 0.1: return False
-        return self.post("/api/idle/saveidle",{
+        payload = {
             "email":EMAIL,"machineName":MACHINE,
             "idleStart":start,"idleEnd":end,"durationInMinutes":round(minutes,2)
-        })
+        }
+        if self.post("/api/idle/saveidle", payload):
+            return True
+        buffer_request("/api/idle/saveidle", payload)
+        return False
 
     def send_screenshot(self, path, captured_at):
         try:
@@ -424,13 +637,21 @@ class API:
         except Exception as e: log.debug(f"SS upload: {e}"); return False
 
     def send_network(self, up, down):
-        return self.post("/api/machine/savenetworkusage",{"email":EMAIL,"machineName":MACHINE,"uploadBytes":up,"downloadBytes":down})
+        payload = {"email":EMAIL,"machineName":MACHINE,"uploadBytes":up,"downloadBytes":down}
+        if self.post("/api/machine/savenetworkusage", payload):
+            return True
+        buffer_request("/api/machine/savenetworkusage", payload)
+        return False
 
     def send_lock_unlock(self, eventType, eventTime):
-        return self.post("/api/machine/loglockunlock",{
+        payload = {
             "email":EMAIL,"machineName":MACHINE,
             "eventType":eventType,"eventTime":eventTime
-        })
+        }
+        if self.post("/api/machine/loglockunlock", payload):
+            return True
+        buffer_request("/api/machine/loglockunlock", payload)
+        return False
 
     def send_geolocation(self, latitude, longitude, address=None, locationType="ip"):
         return self.post("/api/machine/savegeolocation",{
@@ -479,6 +700,12 @@ class AppTracker:
 
     def flush(self):
         with self._lock:
+            now = datetime.now(timezone.utc)
+            if self._cur and self._start:
+                dur = (now-self._start).total_seconds()/60
+                if dur > 0:
+                    self._acc[self._cur] = self._acc.get(self._cur, 0) + dur
+                    self._start = now
             apps = [{"appName":k,"durationInMinutes":round(v,2)} for k,v in self._acc.items() if v>0.01]
             self._acc = {}
         return apps
@@ -539,23 +766,33 @@ class ScreenshotService:
 # ── Network Monitor ───────────────────────────────────────────
 class NetMonitor:
     def __init__(self, api):
-        self.api = api; self._last = None
+        self.api = api
+        self._last = None
+        self._pending = {"up": 0, "down": 0}
+        self._lock = threading.Lock()
+
     def update(self):
         if not WIN32_OK or not IS_TRACKING_ENABLED:
             return
         try:
             s = psutil.net_io_counters()
-            if self._last:
-                up = max(0, s.bytes_sent - self._last.bytes_sent)
-                down = max(0, s.bytes_recv - self._last.bytes_recv)
-                log.debug(f"NetMonitor: {up} up, {down} down")
-                if up or down:
-                    if self.api.send_network(up, down):
-                        log.info(f"Uploaded network usage: up={up} down={down} ✓")
-                    else:
-                        log.warning("Network upload failed — will retry")
-            self._last = s
-        except: pass
+            with self._lock:
+                if self._last:
+                    up = max(0, s.bytes_sent - self._last.bytes_sent)
+                    down = max(0, s.bytes_recv - self._last.bytes_recv)
+                    self._pending["up"] += up
+                    self._pending["down"] += down
+                    log.debug(f"NetMonitor delta: +{up} up, +{down} down (pending: up={self._pending['up']}, down={self._pending['down']})")
+                    if self._pending["up"] > 0 or self._pending["down"] > 0:
+                        if self.api.send_network(self._pending["up"], self._pending["down"]):
+                            log.info(f"Uploaded network usage: up={self._pending['up']} down={self._pending['down']} ✓")
+                            self._pending["up"] = 0
+                            self._pending["down"] = 0
+                        else:
+                            log.warning(f"Network upload failed — will retry (pending: up={self._pending['up']}, down={self._pending['down']})")
+                self._last = s
+        except Exception as e:
+            log.debug(f"Network monitor error: {e}")
 
 
 class LockMonitor:
@@ -657,22 +894,34 @@ class EMSAgent:
         schedule.clear('network')
 
         schedule.every(1).minutes.tag('heartbeat').do(self._refresh_settings)
-        schedule.every(max(1, APP_INT)).minutes.tag('app_flush').do(self._flush_apps)
-        schedule.every(max(1, BROWSER_INT)).minutes.tag('browser_flush').do(self._flush_browser)
-        schedule.every(max(1, SS_INT)).minutes.tag('screenshot').do(self.ss.capture)
+        if IS_TRACKING_ENABLED:
+            if IS_APP_LOG_ENABLED or IS_IDLE_ENABLED:
+                schedule.every(max(1, APP_INT)).minutes.tag('app_flush').do(self._flush_apps)
+            if IS_BROWSER_LOG_ENABLED:
+                schedule.every(max(1, BROWSER_INT)).minutes.tag('browser_flush').do(self._flush_browser)
+            if IS_SCREENSHOT_ENABLED:
+                schedule.every(max(1, SS_INT)).minutes.tag('screenshot').do(self.ss.capture)
+            schedule.every(5).minutes.tag('network').do(self.net.update)
         schedule.every(15).minutes.tag('geolocation').do(self.geo.update)
-        schedule.every(5).minutes.tag('retry').do(self.ss.retry)
-        schedule.every(5).minutes.tag('network').do(self.net.update)
+        schedule.every(1).minutes.tag('retry').do(self._retry_buffer)
 
     def _refresh_settings(self):
-        old_ss = SS_INT
-        old_browser = BROWSER_INT
+        old_values = (
+            SS_INT, APP_INT, BROWSER_INT, IDLE_MIN,
+            IS_SCREENSHOT_ENABLED, IS_APP_LOG_ENABLED, IS_BROWSER_LOG_ENABLED,
+            IS_IDLE_ENABLED, IS_GEO_ENABLED, IS_TRACKING_ENABLED
+        )
         if self.api.heartbeat():
-            if old_ss != SS_INT or old_browser != BROWSER_INT:
-                log.info(f'✓ Settings refreshed from server (screenshot interval={SS_INT}m, browser interval={BROWSER_INT}m)')
+            new_values = (
+                SS_INT, APP_INT, BROWSER_INT, IDLE_MIN,
+                IS_SCREENSHOT_ENABLED, IS_APP_LOG_ENABLED, IS_BROWSER_LOG_ENABLED,
+                IS_IDLE_ENABLED, IS_GEO_ENABLED, IS_TRACKING_ENABLED
+            )
+            if old_values != new_values:
+                log.info(f'✓ Settings refreshed from server (screenshot={SS_INT}m, app={APP_INT}m, browser={BROWSER_INT}m, idle={IDLE_MIN}m)')
+                self._schedule_jobs()
             else:
                 log.info('✓ Settings refreshed from server')
-            self._schedule_jobs()
 
     def _flush_apps(self):
         if not IS_TRACKING_ENABLED:
@@ -680,25 +929,36 @@ class EMSAgent:
         if IS_APP_LOG_ENABLED:
             apps = self.tracker.flush()
             if apps:
-                if self.api.send_apps(apps): log.info(f"Uploaded {len(apps)} app records ✓")
-                else: log.warning("App upload failed — will retry")
+                if self.api.send_apps(apps):
+                    log.info(f"Uploaded {len(apps)} app records ✓")
+                else:
+                    log.warning("App upload failed — will retry")
         if IS_IDLE_ENABLED:
             idle_periods = self.tracker.flush_idle()
             for idle_start, idle_end, idle_mins in idle_periods:
-                if idle_mins >= 1.0 and self.api.send_idle(idle_start, idle_end, idle_mins):
-                    log.info(f"Uploaded idle: {idle_mins:.1f} mins ✓")
+                if idle_mins >= 1.0:
+                    if self.api.send_idle(idle_start, idle_end, idle_mins):
+                        log.info(f"Uploaded idle: {idle_mins:.1f} mins ✓")
+                    else:
+                        log.warning(f"Idle upload failed — will retry")
 
     def _flush_browser(self):
         if not IS_TRACKING_ENABLED or not IS_BROWSER_LOG_ENABLED:
             return
-        log.info("_flush_browser: triggered")
-        usages = get_browser_history()
-        if not usages:
-            log.debug("_flush_browser: no entries found")
-            return
-        log.info(f"_flush_browser: found {len(usages)} entries")
-        if self.api.send_browser(usages): log.info(f"Uploaded {len(usages)} browser entries ✓")
-        else: log.warning("Browser upload failed — will retry")
+        log.info("Browser flush triggered")
+        try:
+            usages = get_browser_history()
+            if not usages or len(usages) == 0:
+                log.info("No browser history entries found in this flush period")
+                return
+            log.info(f"Browser flush: {len(usages)} entries found, sending...")
+            if self.api.send_browser(usages):
+                log.info(f"Uploaded {len(usages)} browser entries ✓")
+            else:
+                log.warning(f"Browser upload failed for {len(usages)} entries — will retry")
+        except Exception as e:
+            log.error(f"Browser flush error: {e}", exc_info=True)
+            log.warning("Browser upload failed — will retry")
 
     def _tick_loop(self):
         while self._run:
@@ -707,6 +967,16 @@ class EMSAgent:
             try: self.lock.update()
             except Exception as e: log.debug(f"Tick: {e}")
             time.sleep(1)
+
+    def _retry_buffer(self):
+        try:
+            self.ss.retry()
+        except Exception as e:
+            log.debug(f"Screenshot retry: {e}")
+        try:
+            retry_buffered_requests(self.api)
+        except Exception as e:
+            log.debug(f"Buffered request retry: {e}")
 
     def stop(self):
         log.info("Stopping...")

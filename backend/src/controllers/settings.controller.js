@@ -3,6 +3,7 @@ const ShiftModel = require('../models/Shift.model');
 const AppsMasterModel = require('../models/AppsMaster.model');
 const TimeSettingsModel = require('../models/TimeSettings.model');
 const { ok, fail } = require('../utils/response');
+const { getIO } = require('../config/socket');
 
 // Shifts
 const getShifts       = async (req, res, next) => { try { return ok(res, await ShiftModel.findAll()); } catch (e) { next(e); } };
@@ -70,4 +71,28 @@ const toggleService = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
-module.exports = { getShifts, createShift, updateShift, deleteShift, assignShift, removeShiftEmployee, getShiftEmployees, getApps, updateAppCat, addApp, getTimeSettings, updateTimeSettings, toggleService };
+const refreshAgentSettings = async (req, res, next) => {
+  try {
+    const email = req.body.email || req.query.email;
+    if (!email) return fail(res, 'email required', 400);
+    const ts = await TimeSettingsModel.get(email);
+    const payload = {
+      screenshot_interval_minutes:   ts?.screenshot_interval_minutes   || 5,
+      app_log_interval_minutes:      ts?.app_log_interval_minutes      || 30,
+      browser_log_interval_minutes:  ts?.browser_log_interval_minutes  || 30,
+      idle_threshold_minutes:        ts?.idle_threshold_minutes        || 5,
+      is_screenshot_enabled:         ts?.is_screenshot_enabled !== 0,
+      is_app_log_enabled:            ts?.is_app_log_enabled    !== 0,
+      is_browser_log_enabled:        ts?.is_browser_log_enabled !== 0,
+      is_geolocation_enabled:        ts?.is_geolocation_enabled === 1,
+      is_tracking_enabled:           ts?.is_tracking_enabled   !== 0,
+    };
+    const io = getIO();
+    if (io) {
+      io.emit('agent_refresh_settings', { email });
+    }
+    return ok(res, payload, 'Refresh requested');
+  } catch (e) { next(e); }
+};
+
+module.exports = { getShifts, createShift, updateShift, deleteShift, assignShift, removeShiftEmployee, getShiftEmployees, getApps, updateAppCat, addApp, getTimeSettings, updateTimeSettings, toggleService, refreshAgentSettings };
