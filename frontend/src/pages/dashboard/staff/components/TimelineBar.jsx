@@ -4,7 +4,7 @@ import { fmt } from "../../../../utils/helpers";
 const CATEGORY_COLOR = {
   productive: "#3fb950",
   distractive: "#f85149",
-  neutral: "#3fb950",
+  neutral: "#4287f5",
   idle: "#e3b341",
   offline: "#6e7681",
 };
